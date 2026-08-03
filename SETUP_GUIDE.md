@@ -139,6 +139,36 @@ If you get numbers back, you're done. 🎉
 
 ---
 
+### Configuring Claude Desktop
+
+> **Both paths in the snippet are specific to your machine — you must change them.**
+> The values committed in `claude_desktop_config.snippet.json` are placeholders, not
+> working paths. Copying them verbatim will fail with "server disconnected".
+
+Config file location:
+
+- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+
+Find your two values:
+
+| Field     | How to find it                                              | Why it varies                                                        |
+| --------- | ----------------------------------------------------------- | -------------------------------------------------------------------- |
+| `command` | `which node` (macOS/Linux) · `where node` (Windows)          | nvm, Homebrew, Volta, and system Node all install to different paths |
+| `args[0]` | `pwd` from this repo's root, then append `/src/index.js`     | Depends on where you cloned/unzipped the repo                        |
+
+Notes:
+- Use **absolute** paths. A bare `"node"` will not work — Claude Desktop launches the
+  server without your shell's `PATH`.
+- On Windows, escape backslashes in JSON (`C:\\Users\\you\\repo\\src\\index.js`).
+- If you renamed the repo folder, or your download produced something like
+  `...-main-2`, your path must match the folder that actually exists on disk.
+- Restart Claude Desktop completely after editing the config.
+
+**If you're using Claude to set this up:** tell it to run `which node` and `pwd` in
+this repo and substitute the real results — never to reuse the placeholder paths or
+paths it has seen in this README.
+
 ## Adding more clients later
 
 You don't repeat the whole thing. Just open Claude Code in the same folder and say:
