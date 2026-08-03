@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "qbo": {
-      "command": "/Users/isaaccruzperdomo/.nvm/versions/node/v24.14.0/bin/node",
-      "args": ["/Users/isaaccruzperdomo/Desktop/qbo-mcp-server/src/index.js"]
+      "command": "/ABSOLUTE/PATH/TO/YOUR/node",
+      "args": ["/ABSOLUTE/PATH/TO/YOUR/better-quickbooks-Claude-connector/src/index.js"]
     }
   }
 }
