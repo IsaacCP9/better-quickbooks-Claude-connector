@@ -3,9 +3,9 @@
 This app can read and change real QuickBooks data. That is a big deal. Here are
 the common safety questions, answered in plain words.
 
-## What secret things does this app keep?
+## What secret things does this app use?
 
-Two kinds:
+Two things (that we've kept locally to keep them off the internet):
 
 - **Your keys** — the Client ID and Secret from Intuit. They live in a file
   called `.env`.
@@ -13,7 +13,7 @@ Two kinds:
   password each time. They live in files named `tokens.json` or
   `tokens.<nickname>.json`, one per company.
 
-Anyone who gets these could reach your books. So we keep them off the internet.
+Anyone who gets these could reach your books.
 
 ## Are these secrets shared when I put the code online?
 
