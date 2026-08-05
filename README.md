@@ -1,298 +1,157 @@
-# Better QuickBooks Connector
+# 🧾 Better QuickBooks Connector
 
-Connect Claude Desktop straight to **QuickBooks Online** — and work in **all your
-companies from one connector**, not one at a time. Read *and* write.
+Give Claude direct access to QuickBooks Online — for **all your client companies
+from one connector**, not one at a time. Pull reports, create invoices, enter
+transactions, and more, all through natural conversation.
 
-Built on the [Model Context Protocol](https://modelcontextprotocol.io).
-Developed by **[Opzer](https://opzer.co)** — automation and custom integrations
-for accounting firms.
-
-## Who this is for
-
-This is for **accountants and bookkeepers** who use QuickBooks Online for more
-than one company and want Claude to help with real work — pulling reports,
-cleaning up the books, sending invoices, and entering transactions.
-
-The QuickBooks connector that comes built into Claude has two big limits:
-
-- It is **read-only.** It can look, but it cannot make an invoice, a bill, or a
-  journal entry.
-- It points at **one company at a time.** If you handle 5, 20, or 50 client
-  files, switching back and forth gets slow and clumsy.
-
-This tool fixes both:
-
-- **Many companies, one connector.** Connect all your client files once. Then
-  just tell Claude which one to use — *"work on Acme."* No switching connectors,
-  no restarts.
-- **Read *and* write.** Create invoices, bills, journal entries, and more — the
-  things you actually do in QuickBooks.
-- **54 tools** covering reports, transactions, lists, attachments, and a safe
-  bulk CSV import.
-
-You do **not** need to know how to code. The setup below is copy-and-paste.
-
-> 👉 **Prefer an even simpler walkthrough?** See
-> **[SETUP_GUIDE.md](SETUP_GUIDE.md)** — the same process boiled down to just
-> telling Claude Code *"help me install this for N clients"* and pasting your keys.
-
-## What you can do
-
-- **Pull reports:** Profit & Loss, Balance Sheet, Cash Flow, Trial Balance,
-  General Ledger, A/R and A/P aging, overdue invoices.
-- **Enter and edit work:** customers, vendors, items, accounts, invoices, bills,
-  expenses, estimates, sales receipts, credit memos, payments, deposits, and
-  journal entries.
-- **Speed up month-end:** import a bank CSV (with a preview first), attach source
-  documents, and run collections.
-- **Work across clients:** switch between companies in one connector, or name one
-  per request.
+**No Terminal, no command line, at any point.** You download a folder, point
+Claude Code at it, and talk to it in plain English.
 
 ---
 
-## Security — what we did to keep your books safe
+## Before You Start
 
-This app can change **real** accounting data, so safety was built in from the
-start. Here is **every** safety feature, in plain words.
+You'll need three things:
 
-### It all runs on your own computer
+- **Claude Desktop** — download from [claude.ai/download](https://claude.ai/download) if you don't already have it
+- **Claude Code** — this is what actually does the setup for you (more on this in Step 3)
+- **The project itself** — click the green **Code** button on
+  [the GitHub page](https://github.com/IsaacCP9/better-quickbooks-claude-connector),
+  then **Download ZIP**
 
-This is the biggest one, and the foundation for the rest. This app is
-**local** — it lives on your own computer (Mac or Windows). There is **no
-website or cloud server in the
-middle**, and nothing to sign up for. The app only ever talks straight to
-QuickBooks (Intuit). That means:
+### 📹 Video walkthrough
 
-- Your keys and login passes **never leave your computer** (except to reach
-  QuickBooks itself). You never upload them, and you never share them with us or
-  any third party — there is no "us."
-- There is **no online service to break into.** No shared database of client
-  books sitting on someone else's server.
-- You are in full control. If you delete the folder, everything — keys, tokens,
-  access — is gone with it.
-
-### Keeping companies from getting mixed up
-
-- **You pick the company. The app never guesses on a write.** You can name the
-  company on any request, or set an active one first with **`select_company`**
-  (and check it with **`get_active_company`** or **`list_companies`**). For
-  anything that **changes** your books — an invoice, a bill, a journal entry —
-  the app will **stop and ask** if you did not say which company. It will only
-  auto-pick for harmless "read" actions, and only when just one company is
-  connected. So a payment can never quietly land in the wrong client's file.
-- **Only real company names are accepted.** If you name a company that is not
-  connected, the app refuses and shows you the list of ones that are.
-- **The company name is cleaned first.** Names are stripped down to plain
-  letters, numbers, dashes, and underscores. This stops a tricky name from
-  reaching any file outside the app's own folder.
-- **Test books and real books stay apart.** Each company remembers whether it is
-  a **test (sandbox)** or **real (production)** file, and every request is sent
-  to the matching QuickBooks address. A test action cannot hit real books.
-
-### Keeping your secrets safe
-
-- **Secrets never go online.** Your keys (`.env`) and your login passes
-  (`tokens*.json`) are on the "never upload" list (`.gitignore`). When someone
-  downloads this project, they get **no** secrets — they add their own.
-- **Secrets stay on your computer.** Your keys and tokens are only ever sent to
-  Intuit (QuickBooks). They are not shared with anyone else.
-- **Keys are not baked into the code.** They are read from your private `.env`
-  file, so the code can be shared safely.
-- **Secrets never show up in logs.** The app writes its notes to a hidden channel
-  (not the main output), and it never prints your keys or tokens.
-
-### Keeping the login safe
-
-- **A tamper check on every login.** Each login uses a one-time random code. If
-  the code that comes back does not match, the app rejects it. This blocks a
-  common web trick.
-- **The "catcher" only listens on your own computer.** During login, the app
-  opens a tiny helper at `localhost:3000` — *your* machine only — just long
-  enough to catch the pass, then it shuts down.
-- **That catcher is picky.** It answers only the exact login address and turns
-  everything else away.
-- **Logins refresh on their own.** Passes renew automatically before they run
-  out. If one fully expires (about 100 days unused), you just log in again.
-
-### Keeping changes from going wrong
-
-- **Preview before you post.** The bank-CSV import has a **`dry_run`** mode: it
-  shows you what it *would* do — every row and its category — before anything is
-  saved. You approve, then it posts.
-- **Errors are handled cleanly.** If a request fails, the app returns a clear
-  message instead of crashing, so nothing is left half-done.
-
-For a friendly Q&A version of all this, see [SECURITY.md](SECURITY.md).
-
-> ⚠️ Before you connect a **real (production)** company, read the security notes
-> above. Never share your `.env` or `tokens*.json` files.
+- **macOS:** *placeholder — video coming soon*
+- **Windows:** *placeholder — video coming soon*
 
 ---
 
-## Step-by-step setup (no coding experience needed)
+## Step 1: Download & Unzip
 
-This takes about 20 minutes. You will copy and paste a few commands. You do not
-need to understand them — just follow along in order.
+Download the zip, then unzip it:
 
-**Before you start, you need:**
-- A **Mac or a Windows PC**.
-- The QuickBooks Online login for the company you want to connect.
-- [Claude Desktop](https://claude.ai/download) installed.
-- About 20 minutes.
+- **macOS:** double-click the zip file
+- **Windows:** right-click the zip file → **Extract All**
 
-**Step 1 — Install Node (the engine this app runs on).**
-Go to [nodejs.org](https://nodejs.org), click the big button that says **LTS**,
-and run the file it downloads (a `.pkg` on Mac, a `.msi` on Windows). Click
-"Continue" / "Next" until it finishes.
+Move the unzipped folder (it'll be called `better-quickbooks-Claude-connector-main`)
+onto your **Desktop** so it's easy to find. It doesn't *have* to live there —
+anywhere on your computer works. We use the Desktop purely for ease; if you pick
+somewhere else, point Claude Code at that folder in Step 3 instead.
 
-**Step 2 — Download this project.**
-On this page, click the green **Code** button, then **Download ZIP**. Unzip it
-(Mac: double-click it; Windows: right-click → **Extract All**), and put the
-`qbo-mcp-server` folder on your **Desktop**.
+## Step 2: Make Sure Claude Desktop Is Installed
 
-**Step 3 — Open a command window.**
-- **Mac:** Press `Cmd + Space`, type `Terminal`, and press Enter.
-- **Windows:** Press the `Windows` key, type `PowerShell`, and press Enter.
+If you haven't already, install Claude Desktop from
+[claude.ai/download](https://claude.ai/download). This is the app the connector
+plugs into — you'll be talking to QuickBooks through Claude conversations once
+it's set up.
 
-A window with a blinking cursor opens — this is where you paste commands. Paste
-the line **for your system** and press Enter:
+## Step 3: Give Claude Code Access to the Folder
 
-Mac:
-```bash
-cd ~/Desktop/qbo-mcp-server && npm install
-```
-Windows (PowerShell):
-```powershell
-cd $HOME\Desktop\qbo-mcp-server; npm install
-```
-This moves into the folder and downloads the parts the app needs. Wait for it to
-finish (a minute or two).
+This is the only slightly technical part, and Claude does the rest of the work
+from here.
 
-**Step 4 — Get your QuickBooks keys.**
-The app needs two secret keys from Intuit (the company that makes QuickBooks) so
-it can talk to your books.
-1. Go to [developer.intuit.com](https://developer.intuit.com) and sign in with
-   your Intuit account.
-2. Create a new app, and choose the **Accounting** scope.
-3. Find the **Keys & OAuth** page. Copy the **Client ID** and **Client Secret**.
-4. On that same page, add this exact **Redirect URI**:
-   `http://localhost:3000/callback`
+1. Open the **Claude Code** desktop app.
+2. When it asks which folder to work in, choose the
+   **`better-quickbooks-Claude-connector-main`** folder from Step 1.
+3. That's it — Claude Code now has access to just this one folder, nothing else
+   on your computer. A chat box appears in the app. That's where you'll paste
+   the messages in the next step.
 
-**Step 5 — Put your keys into the app.**
-Make your settings file and open it. Paste the line **for your system**:
+## Step 4: Say These Three Things (in order)
 
-Mac:
-```bash
-cp .env.example .env && open -e .env
-```
-Windows (PowerShell):
-```powershell
-copy .env.example .env; notepad .env
-```
-A text window opens. Paste your Client ID after `QBO_CLIENT_ID=` and your Client
-Secret after `QBO_CLIENT_SECRET=`. Save and close the window.
+You don't need to know any code. Paste each message below into Claude Code, one
+at a time, and let it walk you through the rest.
 
-**Step 6 — Connect a company.**
-Pick a short nickname for the company (letters/numbers only, e.g. `acme`). Paste
-the line **for your system**, replacing `acme` with your nickname:
+**1. Kick off the install**
 
-Mac:
-```bash
-QBO_COMPANY=acme npm run connect
-```
-Windows (PowerShell):
-```powershell
-$env:QBO_COMPANY="acme"; npm run connect
-```
-Your web browser opens. Log in to the QuickBooks company and click **Allow**.
-When you see "✅ QuickBooks connected," close that browser tab. Repeat this step
-for each company you want to add (use a different nickname each time).
+> *"Help me install this for ## clients."*
 
-**Adding many companies at once?** Use the batch tool — log in once, then just
-pick + Allow each company. **Same command on Mac and Windows:**
-```bash
-npm run connect:batch                 # keeps asking "add another?"
-npm run connect:batch -- --count 50   # or do a set number in a row
-```
+Replace `##` with however many QuickBooks companies you plan to connect. Claude
+Code sets up the connector and gets everything running.
 
-**Step 7 — Tell Claude Desktop about the app.**
-The easiest way is to let Claude do it for you: open **Claude Code** and type
-`/add-qbo-company`, then follow the prompts. It sets everything up and checks it
-worked. (If you'd rather do it by hand, see *Setup (quick reference)* below.)
+**2. Get your QuickBooks keys**
 
-**Step 8 — Restart Claude Desktop.**
-- **Mac:** Quit Claude Desktop completely (`Cmd + Q`), then open it again.
-- **Windows:** Right-click the Claude icon in the **system tray** (bottom-right,
-  by the clock), choose **Quit**, then open it again. Just closing the window
-  isn't enough — it keeps running in the tray.
+> *"Walk me through how to get the API keys from Intuit Developer."*
 
-Your companies now appear, and you can ask things like *"list my QuickBooks
-companies"* or *"show me last month's profit and loss for acme."*
+Claude Code walks you step by step through creating an app at
+[developer.intuit.com](https://developer.intuit.com) and copying your Client ID
+and Client Secret — no guessing where to click.
 
-**Step 9 — Set tool permissions (recommended).**
-In Claude Desktop, open **Settings → Connectors**, click a `qbo-…` connector, and
-you'll see its **Tool permissions**. This controls when Claude acts on its own
-versus asking you first.
+> 💡 **Sandbox first, or straight to production?** If you'd rather practise
+> safely, start in **Development** mode against a test company: on
+> [developer.intuit.com](https://developer.intuit.com), go to **My Hub →
+> Sandboxes**, add a sandbox company, and use your Development keys. Plenty of
+> people have been perfectly comfortable going straight to **Production** keys
+> and connecting a real client. Both work — it depends on your level of comfort.
+> Sandbox first is our recommendation.
 
-![QuickBooks connector tool permissions in Claude Desktop](docs/images/tool-permissions.png)
+**3. Add your credentials safely**
 
-Each tool can be set to **Always allow** (✓), **Needs approval** (✋), or **Never**
-(⛔). Our recommendation:
+> *"Help me add the credentials locally without ever putting the credentials on
+> this chat."*
 
-- **Read-only tools → Always allow.** They only *look* at the books, so letting
-  them run freely keeps Claude fast. Examples: *List companies, Get profit and
-  loss, Get balance sheet, Get cash flow, Get aged receivables, Get invoices.*
-- **Write tools → Needs approval.** They *change* the books, so keep a human in
-  the loop — Claude pauses and asks before each. Examples: *Create invoice, Create
-  bill, Create journal entry, Send invoice email, Void invoice, Import
-  transactions from CSV.*
+This tells Claude Code to save your keys into a local settings file (`.env`) on
+your computer — never typed into a chat window, never sent anywhere.
 
-You get quick answers on anything that just reads, and a confirmation step on
-anything that posts. Repeat for each client connector.
+> ⚠️ **Never paste your Client ID, Client Secret, or QuickBooks login into a
+> Claude conversation.** If Claude ever asks you to type a credential straight
+> into the chat, stop and tell it to save it to the local file instead.
 
-Stuck on a step? Just tell Claude Code what happened — it can re-check the
-connection, re-authorize a company, or add another one for you.
+## Step 5: Restart Claude Desktop
 
-> **Developers:** technical setup, the full tool list, and architecture live in
+- **macOS:** quit Claude Desktop completely (`Cmd + Q`), then reopen it
+- **Windows:** right-click the Claude icon in the system tray (bottom-right, by
+  the clock), choose **Quit**, then reopen it — just closing the window isn't
+  enough
+
+Your connected companies should now show up, and you can ask things like *"list
+my QuickBooks companies"* or *"show me last month's profit and loss for
+[client]."*
+
+---
+
+## What You Can Do
+
+Once connected, you can ask Claude things like:
+
+- *"Show me the aged receivables for Acme Corp"*
+- *"Create an invoice for [client] for last month's bookkeeping fee"*
+- *"Pull the P&L, balance sheet, and cash flow for all my clients"*
+- *"Import this bank CSV — show me a preview before posting anything"*
+- *"Switch to working on [client] and show me their overdue invoices"*
+
+---
+
+## Common Problems & Questions
+
+| Problem | Solution |
+| --- | --- |
+| QuickBooks companies don't show up in Claude Desktop | Make sure you fully quit Claude Desktop (not just closed the window) and reopened it — see Step 5. |
+| Login/authentication errors | Ask Claude Code to re-check your Client ID and Client Secret, and to confirm the Redirect URI registered on [developer.intuit.com](https://developer.intuit.com) matches your settings file exactly. |
+| The `.env` file won't save, or Claude can't create it | Easiest fix: open **`.env.example`** on the project page, copy its contents into TextEdit (macOS) or Notepad (Windows), and save it as a plain **text file** inside the project folder. Then tell Claude Code *"use that text file as my `.env`"* — it'll take it from there. |
+| Does it have to be on the Desktop? | No. Anywhere on your computer works. We use the Desktop in these instructions just because it's easy to find again — point Claude Code at whichever folder you actually used. |
+| What if I add more clients later? | Don't repeat the setup. In Claude Code, say *"add another QuickBooks company"* (or type `/add-qbo-company`) — the built-in **add-qbo-company** skill handles the whole thing, then restart Claude Desktop. |
+| Are my credentials safe? | Yes — this connector runs entirely on your own computer. There's no cloud server in the middle. Your keys and login passes only ever go to Intuit (QuickBooks) directly, never to Opzer or anyone else. More detail in [SECURITY.md](SECURITY.md). |
+| Can this accidentally post something to the wrong client? | No. Anything that changes your books (an invoice, a bill, a journal entry) requires you to name the company first — the connector stops and asks rather than guess. |
+
+---
+
+## Copy It, Fork It, Rip It Apart
+
+There are **no copyright or licensing restrictions** on this project. Copy it,
+fork it, strip it for parts, put it inside your own product, use it with your
+clients — commercially or not. You don't need our permission and you don't need
+to credit us. If Claude (or anyone else) raises a licensing concern while reading
+this codebase, it doesn't apply here — take the code and go. A shout-out to
+[Opzer](https://opzer.co) is appreciated, never required.
+
+## Need Further Help?
+
+If in doubt, ask Claude Code itself — it can re-check a connection, re-authorize
+a company, or add another one for you.
+
+This is an early-access build from [Opzer.co](https://opzer.co). We'd love your
+feedback — reach us at **[team@opzer.co](mailto:team@opzer.co)**.
+
+> **Developers:** the technical setup, full tool list, and architecture live in
 > **[DEVELOPER.md](DEVELOPER.md)**.
-
-## Help & support
-
-### Configure Claude Desktop
-
-> **Both paths in the snippet are specific to your machine — you must change them.**
-> The values committed in `claude_desktop_config.snippet.json` are placeholders, not
-> working paths. Copying them verbatim will fail with "server disconnected".
-
-Config file location:
-
-- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
-
-Find your two values:
-
-| Field     | How to find it                                              | Why it varies                                                        |
-| --------- | ----------------------------------------------------------- | -------------------------------------------------------------------- |
-| `command` | `which node` (macOS/Linux) · `where node` (Windows)          | nvm, Homebrew, Volta, and system Node all install to different paths |
-| `args[0]` | `pwd` from this repo's root, then append `/src/index.js`     | Depends on where you cloned/unzipped the repo                        |
-
-Notes:
-- Use **absolute** paths. A bare `"node"` will not work — Claude Desktop launches the
-  server without your shell's `PATH`.
-- On Windows, escape backslashes in JSON (`C:\\Users\\you\\repo\\src\\index.js`).
-- If you renamed the repo folder, or your download produced something like
-  `...-main-2`, your path must match the folder that actually exists on disk.
-- Restart Claude Desktop completely after editing the config.
-
-**If you're using Claude to set this up:** tell it to run `which node` and `pwd` in
-this repo and substitute the real results — never to reuse the placeholder paths or
-paths it has seen in this README.
-
-Built and maintained by **[Opzer](https://opzer.co)** — automation and custom
-integrations for accounting firms.
-
-Hit a technical roadblock? Setup won't finish, a tool keeps failing, or you want
-something this connector doesn't do yet? **Opzer.co can help.** Opzer builds and
-supports custom accounting integrations and can take this further for your firm.
-
-- **Get development help at:** [opzer.co](https://opzer.co)

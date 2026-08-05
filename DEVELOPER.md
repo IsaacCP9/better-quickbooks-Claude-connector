@@ -1,9 +1,8 @@
 # Developer & technical reference
 
 Technical setup, tooling, and architecture for the QuickBooks connector. If you
-just want to install it, start with the non-technical
-**[SETUP_GUIDE.md](SETUP_GUIDE.md)** or the step-by-step in
-[README.md](README.md).
+just want to install it, start with the non-technical walkthrough in
+**[README.md](README.md)** — no Terminal required there.
 
 ## Setup (quick reference)
 
@@ -70,6 +69,23 @@ Windows (use `node.exe`, and **double** every backslash in JSON):
 ```
 Fully **quit and reopen** Claude Desktop. `qbo` appears under
 **Settings → Connectors** with all 54 tools.
+
+### 5. Tool permissions (recommended)
+
+In Claude Desktop, open **Settings → Connectors**, click a `qbo-…` connector, and
+set its **Tool permissions**. Each tool can be **Always allow** (✓), **Needs
+approval** (✋), or **Never** (⛔).
+
+![QuickBooks connector tool permissions in Claude Desktop](docs/images/tool-permissions.png)
+
+- **Read-only tools → Always allow** (`list_companies`, `get_*` reports, `query`,
+  `select_company`, `get_active_company`) — they only look, so Claude stays fast.
+- **Write tools → Needs approval** (everything `create_*` / `update_*` / `send_*`,
+  plus `void_invoice`, `attach_file`, `import_transactions_from_csv`, and
+  `api_request` — it accepts POST, so treat it as a write tool).
+
+Freshly installed connectors default every tool to "needs approval", so set this
+once per connector.
 
 ## Multiple companies (one connector)
 

@@ -1,1 +1,1 @@
-Place tool-permissions.png here (referenced by README.md and SETUP_GUIDE.md).
+Place tool-permissions.png here (referenced by DEVELOPER.md).
