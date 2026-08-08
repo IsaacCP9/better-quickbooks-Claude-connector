@@ -14,6 +14,7 @@
 // environment it landed in (see defineTool / writeBanner).
 
 import { readFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -1754,8 +1755,27 @@ defineTool(
 // ---- start -----------------------------------------------------------------
 // Only claim stdio when this file is the process entry point. The test suite
 // imports the module to inspect the tool table, and must not start a server.
+//
+// Compare REAL paths, not just normalized ones. Node's ESM loader resolves
+// symlinks when it builds import.meta.url, but process.argv[1] keeps whatever
+// path the user typed. If any parent directory is a symlink — a linked Desktop,
+// a symlinked project folder, /tmp on macOS — the two differ, and a plain
+// path.resolve comparison would decide this file is "imported", start nothing,
+// and exit 0. The connector would then vanish from Claude Desktop with no error.
+//
+// This errs toward starting: an unexpected miss is silent and baffling, whereas
+// an unexpected start is immediately obvious.
+function resolveEntryPath(p) {
+  try {
+    return realpathSync(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
 const isEntryPoint =
-  process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+  Boolean(process.argv[1]) &&
+  resolveEntryPath(process.argv[1]) === resolveEntryPath(fileURLToPath(import.meta.url));
 
 if (isEntryPoint) {
   const transport = new StdioServerTransport();
