@@ -2,6 +2,12 @@
   "name": "qbo-mcp-server",
   "version": "1.0.0",
   "description": "Custom MCP server connecting Claude Desktop directly to QuickBooks Online (read + write).",
+  "license": "MIT-0",
+  "author": "Opzer (https://opzer.co)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/IsaacCP9/better-quickbooks-claude-connector.git"
+  },
   "type": "module",
   "main": "src/index.js",
   "scripts": {

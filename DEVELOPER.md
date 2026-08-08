@@ -70,22 +70,40 @@ Windows (use `node.exe`, and **double** every backslash in JSON):
 Fully **quit and reopen** Claude Desktop. `qbo` appears under
 **Settings → Connectors** with all 54 tools.
 
-### 5. Tool permissions (recommended)
+### 5. Tool permissions (important)
 
 In Claude Desktop, open **Settings → Connectors**, click a `qbo-…` connector, and
 set its **Tool permissions**. Each tool can be **Always allow** (✓), **Needs
 approval** (✋), or **Never** (⛔).
 
-![QuickBooks connector tool permissions in Claude Desktop](docs/images/tool-permissions.png)
+This is not just a convenience setting. **The server itself has no confirmation
+gate, no destructive-action flag, and no read-only mode** — the client's approval UI
+is the only thing standing between a model decision and a live write. Freshly
+installed connectors default every tool to "needs approval", so the risk is in
+loosening it, not in leaving it alone.
 
-- **Read-only tools → Always allow** (`list_companies`, `get_*` reports, `query`,
-  `select_company`, `get_active_company`) — they only look, so Claude stays fast.
-- **Write tools → Needs approval** (everything `create_*` / `update_*` / `send_*`,
-  plus `void_invoice`, `attach_file`, `import_transactions_from_csv`, and
-  `api_request` — it accepts POST, so treat it as a write tool).
+- **Read-only reports → Always allow** (`list_companies`, `select_company`,
+  `get_active_company`, the `get_*` reports) — they only look, so Claude stays fast.
+- **Write tools → Needs approval** — everything `create_*` / `update_*` / `send_*`,
+  plus `void_invoice`.
+- **Keep these four on Needs approval no matter what.** They reach much further than
+  their names suggest, and each is documented in
+  [SECURITY.md](SECURITY.md#the-escape-hatch-tools):
+  - `api_request` — raw call to any QBO endpoint. The `GET`/`POST` enum is not a
+    safety boundary: QBO does *all* mutation over POST, including
+    `?operation=delete`, `?operation=void`, `/send`, and 30-op `/batch`. It reaches
+    the company's entire write and delete surface, with no allowlist.
+  - `query` — arbitrary `SELECT` against any entity, no row cap. Read-only, but one
+    call can pull a whole ledger into context. Unlike writes, it auto-picks the
+    company when only one is connected.
+  - `attach_file` — reads **any** local path (no allowlist, extension check, or size
+    cap) and uploads it to QuickBooks. That includes this project's own `.env` and
+    `tokens.*.json`.
+  - `import_transactions_from_csv` — also reads any local path, and batch-posts. Use
+    its `dry_run` first.
 
-Freshly installed connectors default every tool to "needs approval", so set this
-once per connector.
+*(A screenshot of this settings pane belongs at `docs/images/tool-permissions.png`;
+it hasn't been captured yet.)*
 
 ## Multiple companies (one connector)
 
@@ -97,9 +115,22 @@ company at runtime:
 - **`get_active_company`** — check which is active.
 - Every tool also takes an optional **`company`** argument to override per call.
 
-Resolution precedence per call: *explicit `company` → session default → env
-`QBO_COMPANY` → sole company (reads only) → error listing choices.* Write tools
-never auto-pick — see the **Security** section of the README.
+Resolution precedence per call (`resolveCompany`, `src/index.js:174-202`): *explicit
+`company` → session default → env `QBO_COMPANY` → sole company (reads only) → error
+listing choices.*
+
+Write tools don't auto-pick **when several companies are discovered** — but note two
+gaps before relying on that as a guarantee:
+
+- `listCompanies()` skips the legacy `tokens.json` filename by design
+  (`src/qbo.js:107-128`), so on a `npm run connect` install with no slug, resolution
+  returns `""` at `src/index.js:194` *before* the write check and every write posts
+  unnamed.
+- `sanitizeSlug` (`src/qbo.js:34-36`) strips invalid characters rather than rejecting,
+  so a wrong `company` value can collapse into a different valid slug and pass
+  validation.
+
+Both are tracked in [SECURITY.md → Known limitations](SECURITY.md#known-limitations).
 
 > Typical flow in Claude: *"list my companies"* → *"work on 8315"* → *"create a
 > journal entry: debit Accounting 500, credit Checking 500"*.
@@ -147,6 +178,12 @@ troubleshooting reference.
 > `api_request` is the escape hatch for anything not wrapped: pass a path under
 > `/v3/company/{realmId}` (e.g. `/reports/ProfitAndLossDetail?...`,
 > `/query?query=SELECT * FROM Bill`) and it handles auth, realm, and minorversion.
+>
+> Its `GET`/`POST` enum is **not** a privilege boundary — QBO mutates exclusively over
+> POST, so this tool reaches deletes (`?operation=delete`), voids, sends, and `/batch`.
+> The path is also not validated against `..`, so it can escape the
+> `/v3/company/{realmId}` prefix (`src/qbo.js:330-332`). Treat it as full access to the
+> selected company.
 
 ## Notes
 
@@ -171,3 +208,25 @@ troubleshooting reference.
 For common setup snags (port in use, refresh-token expiry, wrong realm, a
 company authorized but not registered), see
 [the troubleshooting guide](.claude/skills/add-qbo-company/references/troubleshooting.md).
+
+## Security & data flow
+
+Before pointing this at a client's books, read [SECURITY.md](SECURITY.md). The two
+things developers most often miss:
+
+- **Everything a tool returns enters the Claude conversation** and is processed by
+  Anthropic under the operator's plan and settings. Credentials stay local; accounting
+  data does not.
+- Tokens and `.env` are plaintext at default file permissions inside the project
+  directory — the same directory users are told to hand to Claude Code.
+
+## License
+
+**MIT No Attribution** — see [LICENSE](LICENSE). Provenance and dependency licenses are
+documented in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). MIT-0 grants copyright
+permissions only; it grants no trademark rights and carries an "as is" warranty
+disclaimer.
+
+Independent project — not affiliated with, endorsed by, or sponsored by Intuit Inc. or
+Anthropic, PBC. QuickBooks and Intuit are trademarks of Intuit Inc.; Claude and
+Anthropic are trademarks of Anthropic, PBC.
