@@ -1,8 +1,14 @@
 node_modules/
 
 # Secrets — never commit
+# `.env` alone matches only that exact name, so .env.local / .env.production /
+# .env.bak would otherwise be committable. Ignore the whole family, then allow
+# the template back in.
 .env
+.env.*
+!.env.example
 tokens*.json
+.claude/settings.local.json
 
 # Generated output / scratch
 save-excels-here/

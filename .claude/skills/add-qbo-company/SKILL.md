@@ -20,6 +20,13 @@ selected by the `QBO_COMPANY` env var, which maps to its own `tokens.<slug>.json
 file (`src/qbo.js`). One Claude Desktop connector per company (`qbo-<slug>`)
 means every company shows up as its own toolset, all live simultaneously.
 
+> **Two setups exist.** This skill wires up the **one-connector-per-company**
+> layout described above. The setup in [README.md](../../../README.md) uses a
+> single unified `qbo` connector where you pick the company at runtime with
+> `select_company` or a per-call `company` argument. Both work against the same
+> token files; the unified one is what a fresh install gets. Use this skill when
+> you want a company to have its own dedicated connector entry.
+
 Adding one has exactly three moving parts, and only the middle one needs a human:
 
 1. **Authorize** — a browser login to Intuit that writes `tokens.<slug>.json`.
@@ -128,7 +135,13 @@ targeted nudge if either is missing.
 The new connector only appears after a full relaunch — **Quit** Claude Desktop
 (Cmd-Q, not just closing the window) and reopen it. Tell the user this explicitly;
 it's the most common "why isn't it showing up" cause. After relaunch, the company
-appears under Settings → Connectors as `qbo-<slug>` with all 16 tools.
+appears under Settings → Connectors as `qbo-<slug>` with all 54 tools.
+
+While you're there, set the connector's **Tool permissions**. Tools are annotated
+read-only vs destructive, so the screen distinguishes them. `attach_file`,
+`import_transactions_from_csv` and `api_request` reach further than their names
+suggest — see [DEVELOPER.md → Powerful tools](../../../DEVELOPER.md#powerful-tools--what-they-can-reach)
+— and are worth setting to **Needs approval** or **Never** on a production company.
 
 > Note: the currently-running MCP server in *this* session reads whichever token
 > file its own `QBO_COMPANY` points at, so a brand-new connector won't be callable

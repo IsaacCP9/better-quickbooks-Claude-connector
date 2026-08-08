@@ -8,11 +8,15 @@
 //   explicit `company` arg → session default → env QBO_COMPANY → sole company
 //   (reads only) → error listing the available companies.
 // Write tools never auto-pick a company — they require an explicit arg or a
-// session/env default, so a transaction can never post to the wrong books.
+// session/env default. Note the limit of that guarantee: it stops a write going
+// to a company nobody selected, not one going to a company selected earlier and
+// forgotten. Every write therefore reports back the company, realm and
+// environment it landed in (see defineTool / writeBanner).
 
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { AsyncLocalStorage } from "node:async_hooks";
 import dotenv from "dotenv";
 // Load .env by absolute path (relative to this file), not the current working
 // directory — Claude Desktop launches the server from a different cwd.
@@ -149,6 +153,12 @@ function reportQuery(params) {
   return qs ? `?${qs}` : "";
 }
 
+// ---- per-call context ------------------------------------------------------
+// resolveCompany publishes the company it settled on here so the tool wrapper can
+// report it back without every handler having to. AsyncLocalStorage rather than a
+// module-level variable so concurrent tool calls can't read each other's company.
+const callContext = new AsyncLocalStorage();
+
 // ---- company selection -----------------------------------------------------
 // The session default set via select_company (until the server restarts).
 let sessionDefault = null;
@@ -172,6 +182,11 @@ function envDefaultCompany() {
 // Resolve which company a call targets, enforcing the precedence + write-gate.
 // Returns a concrete slug string ("" = the legacy default tokens.json).
 async function resolveCompany(explicit, { write = false } = {}) {
+  const settle = (slug) => {
+    const store = callContext.getStore();
+    if (store) store.company = slug;
+    return slug;
+  };
   // 1. Explicit per-call argument — validated against what's actually authorized.
   if (explicit != null && String(explicit).trim() !== "") {
     const slug = sanitizeSlug(explicit);
@@ -181,17 +196,17 @@ async function resolveCompany(explicit, { write = false } = {}) {
         `No such company "${explicit}". Available: ${formatCompanyList(companies)}.`
       );
     }
-    return slug;
+    return settle(slug);
   }
   // 2. Session default (set via select_company).
-  if (sessionDefault) return sessionDefault;
+  if (sessionDefault) return settle(sessionDefault);
   // 3. Env default (legacy per-connector QBO_COMPANY).
   const envDefault = envDefaultCompany();
-  if (envDefault) return envDefault;
+  if (envDefault) return settle(envDefault);
   // 4. Convenience fallbacks.
   const companies = await listCompanies();
-  if (companies.length === 0) return ""; // pure legacy single-file / default connector
-  if (companies.length === 1 && !write) return companies[0].slug;
+  if (companies.length === 0) return settle(""); // pure legacy single-file / default connector
+  if (companies.length === 1 && !write) return settle(companies[0].slug);
   // 5. Ambiguous — never guess.
   const why = write
     ? "I won't guess which company to post a write to"
@@ -430,9 +445,92 @@ function parseCSV(text) {
 // ---- MCP server ------------------------------------------------------------
 const server = new McpServer({ name: "qbo-mcp-server", version: "1.0.0" });
 
+/* ---- tool classification ---------------------------------------------------
+ * Every tool is registered through defineTool(), which attaches MCP annotations
+ * from the two sets below. Those annotations are what lets Claude Desktop's
+ * Settings → Connectors → Tool permissions screen tell a report from a payment;
+ * without them all 54 tools render identically and "set writes to Needs approval"
+ * is advice the user has no way to act on.
+ *
+ * This is the single source of truth for the read/write split. A tool missing
+ * from READ_ONLY_TOOLS is treated as a write — the safe direction to fail — and
+ * test/annotations.test.js fails the build if a name here doesn't exist, or if a
+ * registration bypasses defineTool.
+ */
+
+// Tools that cannot change a customer's books. select_company is here because it
+// only moves a pointer inside this process; it touches nothing in QuickBooks.
+const READ_ONLY_TOOLS = new Set([
+  "list_companies", "select_company", "get_active_company",
+  "get_profit_and_loss", "get_balance_sheet", "get_cash_flow",
+  "get_aged_receivables", "get_aged_payables", "get_invoices",
+  "get_overdue_invoices", "query", "get_company_info", "get_general_ledger",
+  "get_trial_balance", "get_transaction_list", "get_transaction_list_by_vendor",
+  "get_transaction_list_by_customer", "get_transaction_list_with_splits",
+  "get_attachments",
+]);
+
+// Writes that modify or remove existing records, or have an irreversible
+// outward-facing effect, as opposed to purely additive ones. Notable entries:
+//   create_invoice  — its send_email option emails a real customer.
+//   attach_file     — reads any local file and uploads it off-machine.
+//   import_…_csv    — bulk-posts in batches of 30 with no rollback.
+//   api_request     — POST reaches ?operation=delete, so it covers hard deletes.
+const DESTRUCTIVE_TOOLS = new Set([
+  "void_invoice",
+  "update_customer", "update_journal_entry", "update_estimate", "update_invoice",
+  "update_sales_receipt", "update_purchase", "update_bill", "update_vendor",
+  "update_item",
+  "send_invoice_email", "send_estimate", "send_sales_receipt",
+  "create_invoice", "attach_file", "import_transactions_from_csv", "api_request",
+]);
+
+const registeredTools = [];
+
+// Prefix a write's result with the company it actually landed in. The company
+// gate in resolveCompany stops a write from *guessing* a company, but once a
+// session default is set every later write silently targets it — so the only way
+// a wrong-company write becomes visible is if the result says where it went.
+async function writeBanner(slug) {
+  let info = null;
+  try {
+    info = (await listCompanies()).find((c) => c.slug === slug) || null;
+  } catch {
+    /* fall through to the slug-only form */
+  }
+  if (!info) return `✍️  Wrote to company: ${slug || "(legacy default tokens.json)"}`;
+  const env = String(info.environment).toLowerCase() === "production"
+    ? "PRODUCTION — real books"
+    : `${info.environment} — test company`;
+  return `✍️  Wrote to company: ${info.slug} · realm ${info.realmId} · ${env}`;
+}
+
+function defineTool(name, description, schema, handler) {
+  const readOnly = READ_ONLY_TOOLS.has(name);
+  const destructive = !readOnly && DESTRUCTIVE_TOOLS.has(name);
+  registeredTools.push({ name, readOnly, destructive });
+
+  const wrapped = async (args, extra) => {
+    const store = { company: undefined };
+    const result = await callContext.run(store, () => handler(args, extra));
+    // Nothing was written on an error path, and reads speak for themselves.
+    if (readOnly || result?.isError || store.company === undefined) return result;
+    return {
+      ...result,
+      content: [{ type: "text", text: await writeBanner(store.company) }, ...(result.content ?? [])],
+    };
+  };
+
+  return server.tool(name, description, schema, {
+    readOnlyHint: readOnly,
+    destructiveHint: destructive,
+    openWorldHint: true,
+  }, wrapped);
+}
+
 /* =========================== COMPANY TOOLS (3) =========================== */
 
-server.tool(
+defineTool(
   "list_companies",
   "List every QuickBooks company this connector can access (each an authorized tokens.<slug>.json), with realmId and environment, plus the current active default.",
   {},
@@ -446,7 +544,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "select_company",
   "Set the active QuickBooks company for subsequent tool calls (persists until changed or the server restarts). Individual tools can still override it with their own `company` argument.",
   { company: z.string().describe("Company slug from list_companies, e.g. 8315") },
@@ -462,7 +560,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "get_active_company",
   "Show which QuickBooks company is currently active (the default for calls that omit `company`) and how it was determined.",
   {},
@@ -484,7 +582,7 @@ server.tool(
 
 /* =========================== READ TOOLS (9) =========================== */
 
-server.tool(
+defineTool(
   "get_profit_and_loss",
   "Profit & Loss report for a date range (YYYY-MM-DD).",
   { start_date: z.string().describe("YYYY-MM-DD"), end_date: z.string().describe("YYYY-MM-DD"), company: companyArg },
@@ -494,7 +592,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "get_balance_sheet",
   "Balance Sheet report for a date range (YYYY-MM-DD).",
   { start_date: z.string(), end_date: z.string(), company: companyArg },
@@ -504,7 +602,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "get_cash_flow",
   "Statement of Cash Flows for a date range (YYYY-MM-DD).",
   { start_date: z.string(), end_date: z.string(), company: companyArg },
@@ -514,7 +612,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "get_aged_receivables",
   "Aged Receivables summary (who owes you, bucketed by age).",
   { company: companyArg },
@@ -524,7 +622,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "get_aged_payables",
   "Aged Payables summary (who you owe, bucketed by age).",
   { company: companyArg },
@@ -534,7 +632,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "get_invoices",
   "List invoices, optionally filtered by status (paid|open|overdue), customer_id, and date range.",
   {
@@ -566,7 +664,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "get_overdue_invoices",
   "All invoices with an outstanding balance whose due date has passed.",
   { company: companyArg },
@@ -579,7 +677,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "query",
   "Run a QBO SQL-style query against any entity, e.g. \"SELECT * FROM Customer\".",
   { sql_query: z.string(), company: companyArg },
@@ -589,7 +687,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "get_company_info",
   "Basic information about the connected QuickBooks company.",
   { company: companyArg },
@@ -605,7 +703,7 @@ server.tool(
 const accountingMethodArg = z.enum(["Cash", "Accrual"]).optional().describe("Cash or Accrual (defaults to the company setting)");
 const dateMacroArg = z.string().optional().describe("QBO date macro, e.g. \"This Fiscal Year\", \"Last Month\" (alternative to start/end dates)");
 
-server.tool(
+defineTool(
   "get_general_ledger",
   "General Ledger report for a date range — every account's transactions with running balances.",
   {
@@ -623,7 +721,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "get_trial_balance",
   "Trial Balance report for a date range — debit/credit balance of every account.",
   {
@@ -640,7 +738,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "get_transaction_list",
   "Transaction List report — all transactions in a date range, optionally filtered.",
   {
@@ -658,7 +756,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "get_transaction_list_by_vendor",
   "Transaction List grouped by vendor for a date range.",
   {
@@ -676,7 +774,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "get_transaction_list_by_customer",
   "Transaction List grouped by customer for a date range.",
   {
@@ -694,7 +792,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "get_transaction_list_with_splits",
   "Transaction List with split lines (each line of every transaction) for a date range.",
   {
@@ -713,7 +811,7 @@ server.tool(
 
 /* =========================== WRITE TOOLS (8) =========================== */
 
-server.tool(
+defineTool(
   "create_customer",
   "Create a new customer.",
   {
@@ -734,7 +832,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "update_customer",
   "Update an existing customer (fetches current SyncToken first).",
   {
@@ -759,7 +857,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "create_item",
   "Create a product or service item.",
   {
@@ -786,7 +884,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "create_invoice",
   "Create an invoice for a customer. line_items is an array of {description, amount}. Optionally email it.",
   {
@@ -837,7 +935,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "create_bill",
   "Record a bill (money you owe a vendor), categorized to an expense account.",
   {
@@ -873,7 +971,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "create_account",
   "Create a Chart of Accounts entry.",
   {
@@ -893,7 +991,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "send_invoice_email",
   "Email an existing invoice to the customer (or an override address).",
   { invoice_id: z.string(), email: z.string().optional(), company: companyArg },
@@ -905,7 +1003,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "import_transactions_from_csv",
   "Read a bank-statement CSV, categorize rows against the Chart of Accounts, and import to QBO. Use dry_run first to preview.",
   {
@@ -1005,7 +1103,7 @@ server.tool(
 
 /* =========================== JOURNAL ENTRY TOOLS (6) =========================== */
 
-server.tool(
+defineTool(
   "create_journal_entry",
   "Create a journal entry from balanced lines (total Debits must equal total Credits). Each line posts an amount to an account as a Debit or Credit; lines may optionally be tagged to a customer/vendor/employee.",
   {
@@ -1028,7 +1126,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "update_journal_entry",
   "Full update of a journal entry: REPLACES all lines with the ones you provide (must stay balanced). Omitted header fields are carried over from the current entry. Fetches SyncToken automatically.",
   {
@@ -1062,7 +1160,7 @@ server.tool(
 
 /* =========================== SALES TRANSACTIONS =========================== */
 
-server.tool(
+defineTool(
   "create_estimate",
   "Create an estimate (quote) for a customer, with line items.",
   {
@@ -1086,7 +1184,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "update_estimate",
   "Sparse-update an estimate (fetches SyncToken first). Pass line_items only to replace all lines.",
   {
@@ -1110,7 +1208,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "send_estimate",
   "Email an existing estimate to the customer (or an override address).",
   { estimate_id: z.string(), email: z.string().optional(), company: companyArg },
@@ -1122,7 +1220,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "update_invoice",
   "Sparse-update an invoice (fetches SyncToken first). Pass line_items only to replace all lines.",
   {
@@ -1148,7 +1246,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "void_invoice",
   "Void an existing invoice (zeros it out but keeps the number). Fetches SyncToken first.",
   { invoice_id: z.string(), company: companyArg },
@@ -1160,7 +1258,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "create_sales_receipt",
   "Create a sales receipt (paid-at-point-of-sale sale) with line items.",
   {
@@ -1185,7 +1283,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "update_sales_receipt",
   "Sparse-update a sales receipt (fetches SyncToken first). Pass line_items only to replace all lines.",
   {
@@ -1209,7 +1307,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "send_sales_receipt",
   "Email an existing sales receipt to the customer (or an override address).",
   { sales_receipt_id: z.string(), email: z.string().optional(), company: companyArg },
@@ -1221,7 +1319,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "create_credit_memo",
   "Create a credit memo for a customer, with line items.",
   {
@@ -1241,7 +1339,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "create_refund_receipt",
   "Create a refund receipt (money returned to a customer), with line items.",
   {
@@ -1263,7 +1361,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "create_payment",
   "Record a customer payment, optionally applied to a specific invoice.",
   {
@@ -1287,7 +1385,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "create_deposit",
   "Create a bank deposit into an account, with one or more source lines.",
   {
@@ -1312,7 +1410,7 @@ server.tool(
 
 /* =========================== PURCHASES / VENDORS =========================== */
 
-server.tool(
+defineTool(
   "create_expense",
   "Record an expense (Purchase) paid by cash, check, or credit card, categorized to expense accounts.",
   {
@@ -1343,7 +1441,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "update_purchase",
   "Sparse-update a purchase/expense (fetches SyncToken first). Pass lines only to replace all lines.",
   {
@@ -1365,7 +1463,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "create_bill_item_based",
   "Record a bill against product/service items (item-based lines), owed to a vendor.",
   {
@@ -1385,7 +1483,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "update_bill",
   "Sparse-update a bill (fetches SyncToken first). Pass account_lines only to replace all lines.",
   {
@@ -1408,7 +1506,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "create_vendor_credit",
   "Record a vendor credit (money a vendor owes you), categorized to expense accounts.",
   {
@@ -1428,7 +1526,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "create_purchase_order",
   "Create a purchase order to a vendor, with item-based lines.",
   {
@@ -1451,7 +1549,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "create_vendor",
   "Create a new vendor.",
   {
@@ -1472,7 +1570,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "update_vendor",
   "Sparse-update an existing vendor (fetches SyncToken first).",
   {
@@ -1500,7 +1598,7 @@ server.tool(
 
 /* =========================== PEOPLE / ITEMS =========================== */
 
-server.tool(
+defineTool(
   "create_employee",
   "Create a new employee.",
   {
@@ -1525,7 +1623,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "create_time_activity",
   "Log a single time activity for an employee or vendor.",
   {
@@ -1550,7 +1648,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "update_item",
   "Sparse-update a product/service item (fetches SyncToken first).",
   {
@@ -1576,7 +1674,7 @@ server.tool(
 
 /* =========================== ATTACHMENTS & ADVANCED =========================== */
 
-server.tool(
+defineTool(
   "attach_file",
   "Attach a file (from a local path) and/or a note to a QuickBooks record, or upload a standalone file. Link it to a record with attach_to_entity + attach_to_id.",
   {
@@ -1616,7 +1714,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "get_attachments",
   "List attachments (files/notes), optionally only those linked to a specific record.",
   {
@@ -1636,7 +1734,7 @@ server.tool(
   })
 );
 
-server.tool(
+defineTool(
   "api_request",
   "Advanced escape hatch: make a raw authenticated call to any QBO endpoint under /v3/company/{realmId}. Provide `path` (e.g. \"/reports/GeneralLedger?start_date=2026-01-01\", \"/query?query=SELECT * FROM Bill\", \"/invoice/145\"), an HTTP method, and an optional JSON body. Auth, realm, and minorversion are handled for you.",
   {
@@ -1654,6 +1752,28 @@ server.tool(
 );
 
 // ---- start -----------------------------------------------------------------
-const transport = new StdioServerTransport();
-await server.connect(transport);
-log("QBO MCP server running (stdio). 54 tools registered.");
+// Only claim stdio when this file is the process entry point. The test suite
+// imports the module to inspect the tool table, and must not start a server.
+const isEntryPoint =
+  process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isEntryPoint) {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  log(`QBO MCP server running (stdio). ${registeredTools.length} tools registered.`);
+}
+
+// Exported for the test suite. Importing this module has no side effects beyond
+// building the tool table above.
+export {
+  registeredTools,
+  READ_ONLY_TOOLS,
+  DESTRUCTIVE_TOOLS,
+  resolveCompany,
+  writeBanner,
+  callContext,
+  parseCSV,
+  reportQuery,
+  guessContentType,
+  esc,
+};

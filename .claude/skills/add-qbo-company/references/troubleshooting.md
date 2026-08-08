@@ -13,6 +13,11 @@ in use.
 - **Redirect URI not registered.** The exact URI `http://localhost:3000/callback`
   must be listed under the app's Redirect URIs in the Intuit developer portal —
   and on the *same* app (sandbox vs production keys have separate redirect lists).
+- **Production keys can't use localhost.** Intuit only accepts `https`,
+  non-localhost Redirect URIs for production apps, so the portal will reject
+  `http://localhost:3000/callback` there. Either stay on Development keys with a
+  sandbox company, or put an HTTPS tunnel in front of port 3000, register that
+  URL on the app, and set `QBO_REDIRECT_URI` to match.
 - **State mismatch — possible CSRF.** A stale browser tab replayed an old
   callback. Close all localhost:3000 tabs and re-run connect fresh.
 
@@ -39,11 +44,17 @@ kill <pid>           # stop it, then re-run connect
   matches the `tokens.<slug>.json` filename exactly. `list_companies.py` flags
   this as REGISTERED but not AUTHORIZED (or vice-versa).
 
-## "Refresh token expired (100+ days)"
+## "Refresh token expired"
 
-Intuit refresh tokens expire after ~100 days of disuse. Re-authorize that one
-company: `QBO_COMPANY=<slug> npm run connect`. No config change or restart needed
-if the connector already exists — the token file is refreshed in place.
+Two clocks: Intuit refresh tokens expire after ~100 days of disuse, **and** every
+refresh token has a hard maximum lifetime (capped at 5 years since Intuit's
+Nov 2025 policy change), so an actively used connection eventually expires too.
+`getValidTokens` compares against the `refresh_expires_at` Intuit actually
+returned, not a hardcoded 100 days.
+
+Re-authorize that one company: `QBO_COMPANY=<slug> npm run connect`. No config
+change or restart needed if the connector already exists — the token file is
+refreshed in place.
 
 ## Wrong company's data appearing
 

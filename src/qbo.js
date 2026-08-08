@@ -10,12 +10,25 @@
 import http from "node:http";
 import { exec } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { readFile, writeFile, readdir } from "node:fs/promises";
+import { readFile, writeFile, readdir, rename, chmod, unlink } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
+
+// Where tokens.<slug>.json files live. Defaults to the project root (where they
+// have always lived, and where .gitignore already covers them). Set QBO_DATA_DIR
+// to keep them somewhere else — e.g. outside a cloud-synced folder, or outside
+// the project entirely. Read per call rather than cached so tests can redirect it.
+function dataDir() {
+  const override = process.env.QBO_DATA_DIR;
+  return override ? path.resolve(override) : ROOT;
+}
+
+// The OAuth callback listener binds loopback only. Anything else would expose the
+// authorization code to other hosts on the network during the auth window.
+const CALLBACK_HOST = "127.0.0.1";
 
 const AUTHORIZE_URL = "https://appcenter.intuit.com/connect/oauth2";
 const TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer";
@@ -40,7 +53,7 @@ const DEFAULT_COMPANY = sanitizeSlug(process.env.QBO_COMPANY || "");
 
 function tokensPathFor(slug) {
   const clean = sanitizeSlug(slug);
-  return path.join(ROOT, clean ? `tokens.${clean}.json` : "tokens.json");
+  return path.join(dataDir(), clean ? `tokens.${clean}.json` : "tokens.json");
 }
 
 // Credentials + redirect come from the environment (one Intuit app per
@@ -94,9 +107,26 @@ async function loadTokens(slug) {
   }
 }
 
+// Write the token bundle owner-readable only (0600) and atomically.
+//
+// 0600 because the default mode (0644 under the usual umask) leaves a live refresh
+// token readable by every other account on the machine. Atomically because a crash
+// or a concurrent refresh part-way through a plain writeFile truncates the file,
+// and loadTokens swallows the parse error — which silently loses the refresh token
+// and forces a full re-authorization.
 async function saveTokens(slug, tokens) {
   const p = tokensPathFor(slug);
-  await writeFile(p, JSON.stringify(tokens, null, 2), "utf8");
+  const tmp = `${p}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
+  try {
+    await writeFile(tmp, JSON.stringify(tokens, null, 2), { encoding: "utf8", mode: 0o600 });
+    await rename(tmp, p);
+    // rename preserves the temp file's mode, but an existing file replaced on a
+    // platform that ignores the mode argument would keep its old permissions.
+    await chmod(p, 0o600).catch(() => {});
+  } catch (e) {
+    await unlink(tmp).catch(() => {});
+    throw e;
+  }
   log("Tokens saved to", p);
 }
 
@@ -105,9 +135,10 @@ async function saveTokens(slug, tokens) {
 // [{ slug, realmId, environment }] — the source of truth for what this connector
 // can reach right now.
 async function listCompanies() {
+  const dir = dataDir();
   let files = [];
   try {
-    files = await readdir(ROOT);
+    files = await readdir(dir);
   } catch {
     return [];
   }
@@ -118,7 +149,7 @@ async function listCompanies() {
     const slug = m[1];
     if (NON_COMPANY_SLUGS.has(slug)) continue;
     try {
-      const d = JSON.parse(await readFile(path.join(ROOT, f), "utf8"));
+      const d = JSON.parse(await readFile(path.join(dir, f), "utf8"));
       out.push({ slug, realmId: d.realmId ?? null, environment: d.environment ?? null });
     } catch {
       /* unreadable token file — skip it */
@@ -233,7 +264,7 @@ async function runAuthorizationFlow() {
       }
     });
 
-    server.listen(port, () => {
+    server.listen(port, CALLBACK_HOST, () => {
       log(`Waiting for QBO login on ${creds.redirectUri} ...`);
       log("Opening your browser to authorize QuickBooks.");
       // Always surface the URL, not just on failure — if the auto-open misfires
@@ -273,9 +304,12 @@ async function refreshTokens(slug, existing) {
     // Intuit rotates the refresh token; keep the new one if returned.
     refresh_token: data.refresh_token || existing.refresh_token,
     expires_at: now + data.expires_in * 1000,
-    refresh_expires_at: now + (data.x_refresh_token_expires_in
-      ? data.x_refresh_token_expires_in * 1000
-      : existing.refresh_expires_at - now),
+    // Intuit normally returns x_refresh_token_expires_in and we roll the window
+    // forward. If it's ever absent, keep the previous deadline rather than
+    // inventing one — the server-side expiry is the authority either way.
+    refresh_expires_at: data.x_refresh_token_expires_in
+      ? now + data.x_refresh_token_expires_in * 1000
+      : existing.refresh_expires_at,
   };
   await saveTokens(slug, tokens);
   log(`Access token refreshed${sanitizeSlug(slug) ? ` for "${sanitizeSlug(slug)}"` : ""}.`);
@@ -306,7 +340,9 @@ async function getValidTokens(slug, { allowInteractive = false } = {}) {
   if (tokens.refresh_expires_at && now > tokens.refresh_expires_at) {
     if (!allowInteractive) {
       throw new Error(
-        `Refresh token expired (100+ days) for ${label}. Re-authorize with ${reconnect}.`
+        `Refresh token expired for ${label}. Re-authorize with ${reconnect}. ` +
+          "(Intuit expires a refresh token after ~100 days without use, and every " +
+          "refresh token also has a hard maximum lifetime — see docs/data-and-compliance.md.)"
       );
     }
     return runAuthorizationFlow();
@@ -443,7 +479,16 @@ async function runBatchAuthorization({ shouldContinue } = {}) {
   const port = Number(redirect.port) || 3000;
 
   const connected = [];
-  let pending = null; // { state, resolve }
+  let pending = null; // { state, resolve, reject }
+
+  // A failed callback aborts the batch rather than leaving the listener armed.
+  // Previously a state mismatch just returned 400 with `pending` still set, so the
+  // port stayed open indefinitely accepting retries.
+  const failPending = (err) => {
+    const p = pending;
+    pending = null;
+    p.reject(err);
+  };
 
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, `http://localhost:${port}`);
@@ -452,8 +497,16 @@ async function runBatchAuthorization({ shouldContinue } = {}) {
     const code = url.searchParams.get("code");
     const realmId = url.searchParams.get("realmId");
     const returnedState = url.searchParams.get("state");
-    if (returnedState !== pending.state) { res.writeHead(400).end("State mismatch — close this tab and retry."); return; }
-    if (!code || !realmId) { res.writeHead(400).end("Missing code or realmId in callback."); return; }
+    if (returnedState !== pending.state) {
+      res.writeHead(400).end("State mismatch — possible CSRF. Close this tab and start over.");
+      failPending(new Error("OAuth state mismatch during batch authorization"));
+      return;
+    }
+    if (!code || !realmId) {
+      res.writeHead(400).end("Missing code or realmId in callback.");
+      failPending(new Error("Missing code/realmId in batch callback"));
+      return;
+    }
     res.writeHead(200, { "Content-Type": "text/html" }).end(
       `<html><body style="font-family:sans-serif;padding:3rem;text-align:center">
          <h2>✅ Connected (#${connected.length + 1})</h2>
@@ -466,7 +519,7 @@ async function runBatchAuthorization({ shouldContinue } = {}) {
 
   await new Promise((resolve, reject) => {
     server.once("error", reject);
-    server.listen(port, resolve);
+    server.listen(port, CALLBACK_HOST, resolve);
   });
   log(`Batch authorize listening on ${creds.redirectUri} (${environment}).`);
 
@@ -483,8 +536,8 @@ async function runBatchAuthorization({ shouldContinue } = {}) {
       log("If it doesn't open, use this URL:");
       log("AUTHORIZE_URL>>> " + authUrl + " <<<");
 
-      const { code, realmId } = await new Promise((resolve) => {
-        pending = { state, resolve };
+      const { code, realmId } = await new Promise((resolve, reject) => {
+        pending = { state, resolve, reject };
         openBrowser(authUrl);
       });
 
@@ -521,4 +574,10 @@ export {
   listCompanies,
   sanitizeSlug,
   DEFAULT_COMPANY,
+  // Exported for the test suite.
+  apiBaseFor,
+  dataDir,
+  loadTokens,
+  saveTokens,
+  tokensPathFor,
 };
