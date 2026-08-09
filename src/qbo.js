@@ -15,7 +15,15 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.join(__dirname, "..");
+
+// Where `.env`-adjacent state lives: the token files. Defaults to the project
+// root (one level up from src/). QBO_TOKENS_DIR relocates them — useful on a
+// shared machine, where the project folder is handed to an agent and default
+// file permissions leave tokens readable by other accounts. Unset behaves
+// exactly as before.
+const ROOT = process.env.QBO_TOKENS_DIR
+  ? path.resolve(process.env.QBO_TOKENS_DIR)
+  : path.join(__dirname, "..");
 
 const AUTHORIZE_URL = "https://appcenter.intuit.com/connect/oauth2";
 const TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer";
@@ -521,4 +529,19 @@ export {
   listCompanies,
   sanitizeSlug,
   DEFAULT_COMPANY,
+  // Exported for tests: pure helpers and the token lifecycle. Not part of the
+  // MCP tool surface — nothing in index.js imports these.
+  ROOT,
+  MINOR_VERSION,
+  AUTHORIZE_URL,
+  TOKEN_URL,
+  SCOPE,
+  tokensPathFor,
+  apiBaseFor,
+  basicAuthHeader,
+  connectEnvironment,
+  loadTokens,
+  saveTokens,
+  refreshTokens,
+  exchangeCodeForTokens,
 };

@@ -100,11 +100,26 @@ Honestly: in plain text, with no encryption and no special file permissions.
   `claude_desktop_config.json.bak-*` backups behind (`register_connector.py:75-78`)
   which are never cleaned up. Those backups contain the secret too. Delete old ones.
 
-If you're on a shared or managed machine, tighten the files yourself:
+If you're on a shared or managed machine, there are two things you can do:
+
+**Tighten the file permissions:**
 
 ```bash
 chmod 600 .env tokens*.json
 ```
+
+**Move the token files out of the project folder** by setting `QBO_TOKENS_DIR` in
+your `.env` (or in the connector's `env` block in the Claude Desktop config):
+
+```bash
+QBO_TOKENS_DIR=~/.config/qbo-mcp
+```
+
+Tokens then live outside the directory you hand to Claude Code, so an agent with
+file access to the project can no longer read them. Leave it unset and everything
+behaves exactly as before. Note this moves the *tokens* only — `.env` itself, and
+the copy of your client secret that the `add-qbo-company` skill writes into the
+Claude Desktop config, are unaffected.
 
 ## What if a secret gets shared by mistake?
 
@@ -253,6 +268,11 @@ you that you're pointed at production.
 
 These are real, we know about them, and they aren't fixed yet. They're listed here
 rather than smoothed over so you can decide what it means for your setup.
+
+Items 1-3 each have a test that pins the current behaviour, marked `KNOWN GAP` in
+the suite. That's deliberate: it means fixing one turns a test red and forces a
+conscious decision, instead of the behaviour drifting unnoticed in either
+direction.
 
 1. **The write gate is bypassed on legacy single-file installs.** Company resolution
    returns early for a plain `tokens.json` setup before the write check runs

@@ -19,6 +19,10 @@ Fill in your Intuit Developer app's `QBO_CLIENT_ID` / `QBO_CLIENT_SECRET`
 (from https://developer.intuit.com → your app → Keys & OAuth). The
 `QBO_REDIRECT_URI` must match a redirect URI registered on the app exactly.
 
+Optionally set **`QBO_TOKENS_DIR`** to keep token files outside the project
+folder — worth doing on a shared machine, since the project directory is the one
+you hand to Claude Code. Unset, tokens live in the project root exactly as before.
+
 ### 3. Authorize a company (one time each)
 ```bash
 # Unified multi-company setup — give each company a short slug:
@@ -200,8 +204,64 @@ troubleshooting reference.
 
 - `src/qbo.js` — OAuth (authorize / refresh), per-company token resolution,
   authenticated request + multipart upload helpers, company discovery.
-- `src/index.js` — the MCP server: tool definitions, company-resolution +
-  write-gate, line-item builders.
+- `src/index.js` — the MCP server: the 54 tool definitions and their wiring.
+- `src/lib/` — the business logic the tools are built from, each module taking its
+  dependencies by injection so it can be tested without a network or a real book:
+  - `format.js` — MCP response shaping (`asText` / `asError`), the `tool()`
+    error-catching wrapper, query-string building, content-type guessing.
+  - `schemas.js` — the shared zod line-item and `company` argument shapes.
+  - `company.js` — `createCompanyResolver()`: the resolution precedence and the
+    **write gate**. Owns the session default, so that mutable state sits next to
+    the rule that depends on it.
+  - `builders.js` — `createBuilders({ qboQuery, qboRequest })`: entity lookups,
+    name-or-Id reference resolution, and the journal / sales / expense / deposit
+    line builders, including the journal balance assertion.
+  - `csv.js` — the bank-import pipeline: parse → detect columns → categorize →
+    plan → batch.
+
+`src/index.js` imports these and passes the real `qbo.js` client in. It also
+exports its configured `server`, and only claims stdio when run as the entry
+point — so it can be imported by tests (or embedded) without hijacking I/O.
+
+## Testing
+
+```bash
+npm test              # the whole suite
+npm run test:watch    # re-run on change
+npm run test:coverage # with a coverage report
+```
+
+No test dependencies — the suite is built on Node's own `node:test` and
+`node:assert`, so `npm install` stays at three runtime packages.
+
+| File | What it covers |
+| --- | --- |
+| `test/format.test.js` | Response shaping, the `tool()` wrapper, `esc`, `reportQuery`, content types |
+| `test/csv.test.js` | CSV parsing edge cases, column detection, amount parsing, categorization, batching |
+| `test/company.test.js` | Resolution precedence, the write gate, slug handling, session state |
+| `test/builders.test.js` | Entity lookups, ref resolution, the journal balance assertion, every line builder |
+| `test/schemas.test.js` | The zod line-item contracts |
+| `test/qbo.pure.test.js` | Slug sanitization, sandbox/production host routing, auth headers, slug derivation |
+| `test/qbo.tokens.test.js` | Token persistence, company discovery, refresh + rotation, expiry logic |
+| `test/qbo.request.test.js` | URL construction, `minorversion` handling, QBO `Fault` extraction, upload |
+| `test/qbo.oauth.test.js` | The localhost callback listener and its CSRF state check |
+| `test/qbo.batch-auth.test.js` | Sequential batch authorization, slug minting and reuse |
+| `test/server.test.js` | End-to-end tool calls over the real MCP protocol via an in-memory transport |
+| `test/write-gate.test.js` | Surface-wide invariant: **all 34 mutating tools refuse to guess a company** |
+| `test/cli.test.js` | The `--connect` / `--connect-batch --dry` argv paths and the entrypoint guard |
+
+Only two boundaries are faked: `global.fetch` and the tokens directory (via
+`QBO_TOKENS_DIR`, pointed at a tmpdir). Everything else — tool registration, zod
+validation, company resolution, line building, request construction — runs for
+real. `test/write-gate.test.js` synthesizes each tool's arguments from its own
+published JSON Schema, so a newly added tool is covered as soon as it is
+registered; it only has to be classified as read or mutating, or the completeness
+test fails.
+
+Known coverage gaps, deliberately: branch coverage in `src/index.js` sits around
+60% because most uncovered branches are per-tool optional-argument handling
+(`if (due_date)`, `if (active != null)` and so on). The business logic those
+handlers delegate to is at 96-100%.
 
 ## Troubleshooting
 

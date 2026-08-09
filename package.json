@@ -13,7 +13,10 @@
   "scripts": {
     "start": "node src/index.js",
     "connect": "node src/index.js --connect",
-    "connect:batch": "node src/index.js --connect-batch"
+    "connect:batch": "node src/index.js --connect-batch",
+    "test": "node --test \"test/**/*.test.js\"",
+    "test:watch": "node --test --watch \"test/**/*.test.js\"",
+    "test:coverage": "node --test --experimental-test-coverage \"test/**/*.test.js\""
   },
   "engines": {
     "node": ">=18"

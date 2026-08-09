@@ -32,8 +32,56 @@ import {
   listCompanies,
   sanitizeSlug,
 } from "./qbo.js";
+import {
+  log,
+  todayISO,
+  asText,
+  tool,
+  esc,
+  reportQuery,
+  guessContentType,
+} from "./lib/format.js";
+import {
+  companyArg,
+  journalLineSchema,
+  salesLineSchema,
+  accountLineSchema,
+  itemLineSchema,
+  depositLineSchema,
+} from "./lib/schemas.js";
+import { formatCompanyList, createCompanyResolver } from "./lib/company.js";
+import { createBuilders } from "./lib/builders.js";
+import {
+  parseCSV,
+  detectColumns,
+  pickFallbackAccount,
+  planImportRows,
+  buildPurchaseBatchItems,
+  chunk,
+} from "./lib/csv.js";
 
-const log = (...a) => console.error("[qbo-mcp]", ...a);
+// ---- wiring ----------------------------------------------------------------
+// The company resolver owns the session default and the write gate; the builders
+// own line construction. Both take their dependencies by injection so the same
+// logic can be exercised in tests against fakes (see test/).
+const companyCtx = createCompanyResolver({ listCompanies, sanitizeSlug });
+const { resolveCompany, envDefaultCompany } = companyCtx;
+
+const {
+  findCustomerByName,
+  findVendorByName,
+  findAccountByName,
+  findAnyIncomeAccount,
+  findAnyServiceItem,
+  resolveRef,
+  fetchEntity,
+  buildJournalLines,
+  readJournalEntry,
+  buildSalesLines,
+  buildAccountLines,
+  buildItemExpenseLines,
+  buildDepositLines,
+} = createBuilders({ qboQuery, qboRequest });
 
 // ---- One-time authorization mode ------------------------------------------
 if (process.argv.includes("--connect")) {
@@ -109,324 +157,6 @@ if (process.argv.includes("--connect-batch")) {
   }
 }
 
-// ---- helpers ---------------------------------------------------------------
-const todayISO = () => new Date().toISOString().slice(0, 10);
-const asText = (obj) => ({ content: [{ type: "text", text: typeof obj === "string" ? obj : JSON.stringify(obj, null, 2) }] });
-
-// When a tool hits a wall, point the user at real help. This app is built by
-// Opzer (opzer.co); a technical roadblock is exactly when someone might want
-// custom development help, so every tool error surfaces it.
-const OPZER_HELP =
-  "Hit a technical roadblock? This connector is built by Opzer (https://opzer.co), " +
-  "which builds and supports custom accounting integrations. If you're stuck, reach out to Opzer.co for development help.";
-const asError = (msg) => ({
-  content: [{ type: "text", text: `Error: ${msg}\n\n${OPZER_HELP}` }],
-  isError: true,
-});
-
-// Wrap a handler so any thrown error is returned cleanly to Claude instead of crashing the server.
-function tool(handler) {
-  return async (args) => {
-    try {
-      return await handler(args || {});
-    } catch (e) {
-      log("tool error:", e.message);
-      return asError(e.message);
-    }
-  };
-}
-
-function esc(v) {
-  return String(v).replace(/'/g, "\\'");
-}
-
-// Build a QBO report query string from a params object, dropping empties.
-function reportQuery(params) {
-  const qs = Object.entries(params)
-    .filter(([, v]) => v != null && v !== "")
-    .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
-    .join("&");
-  return qs ? `?${qs}` : "";
-}
-
-// ---- company selection -----------------------------------------------------
-// The session default set via select_company (until the server restarts).
-let sessionDefault = null;
-
-const companyArg = z
-  .string()
-  .optional()
-  .describe("Company slug to run against (see list_companies). Omit to use the active/default company.");
-
-function formatCompanyList(companies) {
-  return (
-    companies.map((c) => `${c.slug} (${c.environment}, realm ${c.realmId})`).join("; ") ||
-    "none — authorize one with `QBO_COMPANY=<slug> npm run connect`"
-  );
-}
-
-function envDefaultCompany() {
-  return sanitizeSlug(process.env.QBO_COMPANY || "");
-}
-
-// Resolve which company a call targets, enforcing the precedence + write-gate.
-// Returns a concrete slug string ("" = the legacy default tokens.json).
-async function resolveCompany(explicit, { write = false } = {}) {
-  // 1. Explicit per-call argument — validated against what's actually authorized.
-  if (explicit != null && String(explicit).trim() !== "") {
-    const slug = sanitizeSlug(explicit);
-    const companies = await listCompanies();
-    if (!companies.some((c) => c.slug === slug)) {
-      throw new Error(
-        `No such company "${explicit}". Available: ${formatCompanyList(companies)}.`
-      );
-    }
-    return slug;
-  }
-  // 2. Session default (set via select_company).
-  if (sessionDefault) return sessionDefault;
-  // 3. Env default (legacy per-connector QBO_COMPANY).
-  const envDefault = envDefaultCompany();
-  if (envDefault) return envDefault;
-  // 4. Convenience fallbacks.
-  const companies = await listCompanies();
-  if (companies.length === 0) return ""; // pure legacy single-file / default connector
-  if (companies.length === 1 && !write) return companies[0].slug;
-  // 5. Ambiguous — never guess.
-  const why = write
-    ? "I won't guess which company to post a write to"
-    : "multiple companies are connected";
-  throw new Error(
-    `No company selected — ${why}. Pass a \`company\` argument or call select_company first. Available: ${formatCompanyList(companies)}.`
-  );
-}
-
-// ---- entity lookups (all company-scoped) -----------------------------------
-async function findCustomerByName(name, company) {
-  const r = await qboQuery(`SELECT * FROM Customer WHERE DisplayName = '${esc(name)}'`, { company });
-  return r.Customer?.[0] || null;
-}
-async function findVendorByName(name, company) {
-  const r = await qboQuery(`SELECT * FROM Vendor WHERE DisplayName = '${esc(name)}'`, { company });
-  return r.Vendor?.[0] || null;
-}
-async function findAccountByName(name, company) {
-  const r = await qboQuery(`SELECT * FROM Account WHERE Name = '${esc(name)}'`, { company });
-  return r.Account?.[0] || null;
-}
-async function findAnyIncomeAccount(company) {
-  const r = await qboQuery(`SELECT * FROM Account WHERE AccountType = 'Income' MAXRESULTS 1`, { company });
-  return r.Account?.[0] || null;
-}
-async function findAnyServiceItem(company) {
-  const r = await qboQuery(`SELECT * FROM Item WHERE Type = 'Service' MAXRESULTS 1`, { company });
-  return r.Item?.[0] || null;
-}
-
-// ---- journal-entry helpers -------------------------------------------------
-// One line of a journal entry. Debits and credits across all lines must balance.
-const journalLineSchema = z.object({
-  account: z.string().describe("Account name or Id to post this line to"),
-  amount: z.number().positive().describe("Positive amount; direction is set by posting_type"),
-  posting_type: z.enum(["Debit", "Credit"]),
-  description: z.string().optional().describe("Per-line memo"),
-  entity_name: z.string().optional().describe("Optional customer/vendor/employee to tag this line to"),
-  entity_type: z.enum(["Customer", "Vendor", "Employee"]).optional().describe("Required if entity_name is set"),
-});
-
-// Resolve a name/vendor/employee referenced on a journal line to its Id.
-async function resolveEntityId(name, type, company) {
-  const r = await qboQuery(`SELECT * FROM ${type} WHERE DisplayName = '${esc(name)}'`, { company });
-  const rec = r[type]?.[0];
-  if (!rec) throw new Error(`${type} not found for journal-line entity: "${name}"`);
-  return rec.Id;
-}
-
-// Turn the ergonomic line schema into QBO JournalEntryLineDetail lines, resolving
-// account (and any entity) references and asserting the entry balances.
-async function buildJournalLines(lines, company) {
-  if (!Array.isArray(lines) || lines.length < 2) {
-    throw new Error("A journal entry needs at least two lines, with total debits equal to total credits.");
-  }
-  let debit = 0, credit = 0;
-  const out = [];
-  for (const li of lines) {
-    let acct;
-    if (/^\d+$/.test(String(li.account))) {
-      const found = (await qboQuery(`SELECT * FROM Account WHERE Id = '${esc(li.account)}'`, { company })).Account?.[0];
-      acct = found ? { Id: found.Id, Name: found.Name } : { Id: String(li.account) };
-    } else {
-      const found = await findAccountByName(li.account, company);
-      if (!found) throw new Error(`Account not found for journal line: "${li.account}"`);
-      acct = { Id: found.Id, Name: found.Name };
-    }
-    const detail = {
-      PostingType: li.posting_type,
-      AccountRef: { value: acct.Id, ...(acct.Name ? { name: acct.Name } : {}) },
-    };
-    if (li.entity_name) {
-      if (!li.entity_type) throw new Error(`entity_type is required when entity_name is set (line account "${li.account}").`);
-      detail.Entity = { Type: li.entity_type, EntityRef: { value: await resolveEntityId(li.entity_name, li.entity_type, company) } };
-    }
-    const line = { Amount: li.amount, DetailType: "JournalEntryLineDetail", JournalEntryLineDetail: detail };
-    if (li.description) line.Description = li.description;
-    out.push(line);
-    if (li.posting_type === "Debit") debit += Number(li.amount);
-    else credit += Number(li.amount);
-  }
-  if (Math.abs(debit - credit) > 0.005) {
-    throw new Error(`Journal entry is not balanced: debits ${debit.toFixed(2)} vs credits ${credit.toFixed(2)}.`);
-  }
-  return out;
-}
-
-async function readJournalEntry(id, company) {
-  const r = await qboRequest(`/journalentry/${encodeURIComponent(id)}`, { company });
-  const entry = r.JournalEntry;
-  if (!entry) throw new Error(`No journal entry with Id ${id}`);
-  return entry;
-}
-
-// ---- shared ref/line helpers for the extended entity tools -----------------
-// Resolve a name-or-Id to a QBO {value, name} reference for any entity.
-async function resolveRef(entity, nameOrId, company, nameField = "DisplayName") {
-  if (/^\d+$/.test(String(nameOrId))) {
-    const rec = (await qboQuery(`SELECT * FROM ${entity} WHERE Id = '${esc(nameOrId)}'`, { company }))[entity]?.[0];
-    return rec ? { value: rec.Id, name: rec[nameField] || rec.Name } : { value: String(nameOrId) };
-  }
-  const rec = (await qboQuery(`SELECT * FROM ${entity} WHERE ${nameField} = '${esc(nameOrId)}'`, { company }))[entity]?.[0];
-  if (!rec) throw new Error(`${entity} not found: "${nameOrId}"`);
-  return { value: rec.Id, name: rec[nameField] || rec.Name };
-}
-
-// Fetch a full entity record (for its SyncToken) before a sparse update / void / delete.
-async function fetchEntity(entity, id, company) {
-  const rec = (await qboQuery(`SELECT * FROM ${entity} WHERE Id = '${esc(id)}'`, { company }))[entity]?.[0];
-  if (!rec) throw new Error(`No ${entity} with Id ${id}`);
-  return rec;
-}
-
-// Line schemas shared across the transaction tools.
-const salesLineSchema = z.object({
-  amount: z.number().describe("Line amount"),
-  item: z.string().optional().describe("Product/Service name or Id (defaults to any Service item)"),
-  description: z.string().optional(),
-  quantity: z.number().optional(),
-  unit_price: z.number().optional(),
-});
-const accountLineSchema = z.object({
-  account: z.string().describe("Account name or Id to categorize against"),
-  amount: z.number(),
-  description: z.string().optional(),
-});
-const itemLineSchema = z.object({
-  item: z.string().describe("Product/Service name or Id"),
-  amount: z.number(),
-  quantity: z.number().optional(),
-  unit_price: z.number().optional(),
-  description: z.string().optional(),
-});
-const depositLineSchema = z.object({
-  account: z.string().describe("Source account name or Id (e.g. an income account or Undeposited Funds)"),
-  amount: z.number(),
-  description: z.string().optional(),
-  entity_name: z.string().optional(),
-  entity_type: z.enum(["Customer", "Vendor", "Employee"]).optional(),
-});
-
-// Sales transactions (Invoice/Estimate/SalesReceipt/CreditMemo/RefundReceipt).
-async function buildSalesLines(lines, company) {
-  const out = [];
-  for (const li of lines) {
-    const detail = {};
-    if (li.item) detail.ItemRef = await resolveRef("Item", li.item, company, "Name");
-    else { const it = await findAnyServiceItem(company); if (it) detail.ItemRef = { value: it.Id, name: it.Name }; }
-    if (li.quantity != null) detail.Qty = li.quantity;
-    if (li.unit_price != null) detail.UnitPrice = li.unit_price;
-    const line = { Amount: li.amount, DetailType: "SalesItemLineDetail", SalesItemLineDetail: detail };
-    if (li.description) line.Description = li.description;
-    out.push(line);
-  }
-  return out;
-}
-
-// Account-based expense lines (account-based Bill / Expense / VendorCredit).
-async function buildAccountLines(lines, company) {
-  const out = [];
-  for (const li of lines) {
-    const line = {
-      Amount: li.amount,
-      DetailType: "AccountBasedExpenseLineDetail",
-      AccountBasedExpenseLineDetail: { AccountRef: await resolveRef("Account", li.account, company, "Name") },
-    };
-    if (li.description) line.Description = li.description;
-    out.push(line);
-  }
-  return out;
-}
-
-// Item-based expense lines (item-based Bill / PurchaseOrder).
-async function buildItemExpenseLines(lines, company) {
-  const out = [];
-  for (const li of lines) {
-    const detail = { ItemRef: await resolveRef("Item", li.item, company, "Name") };
-    if (li.quantity != null) detail.Qty = li.quantity;
-    if (li.unit_price != null) detail.UnitPrice = li.unit_price;
-    const line = { Amount: li.amount, DetailType: "ItemBasedExpenseLineDetail", ItemBasedExpenseLineDetail: detail };
-    if (li.description) line.Description = li.description;
-    out.push(line);
-  }
-  return out;
-}
-
-// Deposit lines.
-async function buildDepositLines(lines, company) {
-  const out = [];
-  for (const li of lines) {
-    const detail = { AccountRef: await resolveRef("Account", li.account, company, "Name") };
-    if (li.entity_name) {
-      if (!li.entity_type) throw new Error("entity_type is required when entity_name is set on a deposit line.");
-      detail.Entity = await resolveRef(li.entity_type, li.entity_name, company, "DisplayName");
-    }
-    const line = { Amount: li.amount, DetailType: "DepositLineDetail", DepositLineDetail: detail };
-    if (li.description) line.Description = li.description;
-    out.push(line);
-  }
-  return out;
-}
-
-function guessContentType(name) {
-  const ext = (name.split(".").pop() || "").toLowerCase();
-  const map = {
-    pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
-    gif: "image/gif", csv: "text/csv", txt: "text/plain",
-    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  };
-  return map[ext] || "application/octet-stream";
-}
-
-// Parse a simple CSV (handles quoted fields and commas inside quotes).
-function parseCSV(text) {
-  const rows = [];
-  let field = "", row = [], inQ = false;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (inQ) {
-      if (c === '"' && text[i + 1] === '"') { field += '"'; i++; }
-      else if (c === '"') inQ = false;
-      else field += c;
-    } else if (c === '"') inQ = true;
-    else if (c === ",") { row.push(field); field = ""; }
-    else if (c === "\n" || c === "\r") {
-      if (c === "\r" && text[i + 1] === "\n") i++;
-      if (field !== "" || row.length) { row.push(field); rows.push(row); row = []; field = ""; }
-    } else field += c;
-  }
-  if (field !== "" || row.length) { row.push(field); rows.push(row); }
-  return rows;
-}
-
 // ---- MCP server ------------------------------------------------------------
 const server = new McpServer({ name: "qbo-mcp-server", version: "1.0.0" });
 
@@ -440,7 +170,7 @@ server.tool(
     const companies = await listCompanies();
     return asText({
       count: companies.length,
-      active_default: sessionDefault || envDefaultCompany() || null,
+      active_default: companyCtx.getSessionDefault() || envDefaultCompany() || null,
       companies,
     });
   })
@@ -457,7 +187,7 @@ server.tool(
     if (!info) {
       throw new Error(`No such company "${company}". Available: ${formatCompanyList(companies)}.`);
     }
-    sessionDefault = slug;
+    companyCtx.setSessionDefault(slug);
     return asText({ active_company: slug, realmId: info.realmId, environment: info.environment });
   })
 );
@@ -467,8 +197,8 @@ server.tool(
   "Show which QuickBooks company is currently active (the default for calls that omit `company`) and how it was determined.",
   {},
   tool(async () => {
-    const active = sessionDefault || envDefaultCompany() || null;
-    const source = sessionDefault ? "select_company" : envDefaultCompany() ? "env QBO_COMPANY" : "none";
+    const active = companyCtx.getSessionDefault() || envDefaultCompany() || null;
+    const source = companyCtx.getSessionDefault() ? "select_company" : envDefaultCompany() ? "env QBO_COMPANY" : "none";
     let info = null;
     if (active) {
       const companies = await listCompanies();
@@ -923,12 +653,8 @@ server.tool(
     const rows = parseCSV(raw);
     if (rows.length < 2) throw new Error("CSV appears empty or has no data rows.");
 
-    // Detect header columns.
-    const header = rows[0].map((h) => h.trim().toLowerCase());
-    const dateIdx = header.findIndex((h) => h.includes("date"));
-    const descIdx = header.findIndex((h) => h.includes("desc") || h.includes("memo") || h.includes("payee") || h.includes("name"));
-    const amtIdx = header.findIndex((h) => h.includes("amount") || h.includes("debit") || h === "amt");
-    if (dateIdx < 0 || descIdx < 0 || amtIdx < 0) {
+    const columns = detectColumns(rows[0]);
+    if (columns.dateIdx < 0 || columns.descIdx < 0 || columns.amtIdx < 0) {
       throw new Error(`Could not detect Date/Description/Amount columns. Found headers: ${rows[0].join(", ")}`);
     }
 
@@ -936,24 +662,10 @@ server.tool(
     if (!bank) throw new Error(`Bank account not found: "${bank_account_name}".`);
 
     const accounts = (await qboQuery(`SELECT * FROM Account WHERE AccountType = 'Expense' MAXRESULTS 200`, { company: c })).Account || [];
-    const uncategorized = accounts.find((a) => /uncategorized/i.test(a.Name)) || accounts[0];
-    if (!uncategorized) throw new Error("No expense accounts exist to categorize into.");
+    const fallback = pickFallbackAccount(accounts);
+    if (!fallback) throw new Error("No expense accounts exist to categorize into.");
 
-    const categorize = (desc) => {
-      const d = desc.toLowerCase();
-      const match = accounts.find((a) => a.Name && d.includes(a.Name.toLowerCase().split(" ")[0]));
-      return match || uncategorized;
-    };
-
-    const planned = rows.slice(1)
-      .filter((r) => r.length > Math.max(dateIdx, descIdx, amtIdx))
-      .map((r) => {
-        const desc = (r[descIdx] || "").trim();
-        const amount = Math.abs(parseFloat((r[amtIdx] || "0").replace(/[^0-9.\-]/g, ""))) || 0;
-        const cat = categorize(desc);
-        return { date: (r[dateIdx] || "").trim(), description: desc, amount, category: cat.Name, category_id: cat.Id };
-      })
-      .filter((p) => p.amount > 0);
+    const planned = planImportRows({ rows, columns, accounts, fallback });
 
     if (dry_run) {
       const total = planned.reduce((s, p) => s + p.amount, 0);
@@ -974,27 +686,11 @@ server.tool(
     }
 
     // Post as a QBO batch of Purchase (Expense) transactions from the bank account.
-    const items = planned.map((p, i) => ({
-      bId: `bid${i}`,
-      operation: "create",
-      Purchase: {
-        PaymentType: "Check",
-        AccountRef: { value: bank.Id, name: bank.Name },
-        TxnDate: p.date || todayISO(),
-        PrivateNote: p.description,
-        Line: [{
-          Amount: p.amount,
-          DetailType: "AccountBasedExpenseLineDetail",
-          AccountBasedExpenseLineDetail: { AccountRef: { value: p.category_id, name: p.category } },
-        }],
-      },
-    }));
+    const items = buildPurchaseBatchItems(planned, bank, todayISO());
 
     const results = [];
-    // QBO batch caps at 30 items per request.
-    for (let i = 0; i < items.length; i += 30) {
-      const chunk = items.slice(i, i + 30);
-      const r = await qboRequest(`/batch`, { method: "POST", body: { BatchItemRequest: chunk }, company: c });
+    for (const batch of chunk(items)) {
+      const r = await qboRequest(`/batch`, { method: "POST", body: { BatchItemRequest: batch }, company: c });
       results.push(...(r.BatchItemResponse || []));
     }
     const posted = results.filter((r) => r.Purchase).length;
@@ -1654,6 +1350,16 @@ server.tool(
 );
 
 // ---- start -----------------------------------------------------------------
-const transport = new StdioServerTransport();
-await server.connect(transport);
-log("QBO MCP server running (stdio). 54 tools registered.");
+// The configured server is exported so tests (and any embedder) can attach their
+// own transport. Connecting stdio is skipped when this module is imported rather
+// than run, because claiming stdin/stdout would corrupt the importer's I/O.
+const isEntrypoint =
+  process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+
+if (isEntrypoint) {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  log("QBO MCP server running (stdio). 54 tools registered.");
+}
+
+export { server, companyCtx };
