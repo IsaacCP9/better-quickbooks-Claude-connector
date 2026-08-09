@@ -1,5 +1,10 @@
 # 🧾 Better QuickBooks Connector
 
+> **Independent open-source project.** Not affiliated with, endorsed by, or sponsored
+> by Intuit Inc. or Anthropic, PBC. QuickBooks and Intuit are trademarks of Intuit
+> Inc.; Claude and Anthropic are trademarks of Anthropic, PBC. Both are used here
+> only to describe what this software works with.
+
 Give Claude direct access to QuickBooks Online — for **all your client companies
 from one connector**, not one at a time. Pull reports, create invoices, enter
 transactions, and more, all through natural conversation.
@@ -77,13 +82,14 @@ Claude Code walks you step by step through creating an app at
 [developer.intuit.com](https://developer.intuit.com) and copying your Client ID
 and Client Secret — no guessing where to click.
 
-> 💡 **Sandbox first, or straight to production?** If you'd rather practise
-> safely, start in **Development** mode against a test company: on
+> 💡 **Start in a sandbox.** This is an early-access build that can write to real
+> books, so practise somewhere nothing is real first: on
 > [developer.intuit.com](https://developer.intuit.com), go to **My Hub →
-> Sandboxes**, add a sandbox company, and use your Development keys. Plenty of
-> people have been perfectly comfortable going straight to **Production** keys
-> and connecting a real client. Both work — it depends on your level of comfort.
-> Sandbox first is our recommendation.
+> Sandboxes**, add a sandbox company, and use your **Development** keys. Once
+> you've seen how the tools behave — especially the ones that create invoices,
+> bills, and journal entries — switch to **Production** keys for real client
+> books. Production works fine; the point is to understand what you're pointing
+> at a client's ledger before you do it.
 
 **3. Add your credentials safely**
 
@@ -91,7 +97,9 @@ and Client Secret — no guessing where to click.
 > this chat."*
 
 This tells Claude Code to save your keys into a local settings file (`.env`) on
-your computer — never typed into a chat window, never sent anywhere.
+your computer, rather than having you type them into a chat window. That file
+stays on your machine, and the connector sends its contents only to Intuit when
+it signs in.
 
 > ⚠️ **Never paste your Client ID, Client Secret, or QuickBooks login into a
 > Claude conversation.** If Claude ever asks you to type a credential straight
@@ -131,19 +139,33 @@ Once connected, you can ask Claude things like:
 | The `.env` file won't save, or Claude can't create it | Easiest fix: open **`.env.example`** on the project page, copy its contents into TextEdit (macOS) or Notepad (Windows), and save it as a plain **text file** inside the project folder. Then tell Claude Code *"use that text file as my `.env`"* — it'll take it from there. |
 | Does it have to be on the Desktop? | No. Anywhere on your computer works. We use the Desktop in these instructions just because it's easy to find again — point Claude Code at whichever folder you actually used. |
 | What if I add more clients later? | Don't repeat the setup. In Claude Code, say *"add another QuickBooks company"* (or type `/add-qbo-company`) — the built-in **add-qbo-company** skill handles the whole thing, then restart Claude Desktop. |
-| Are my credentials safe? | Yes — this connector runs entirely on your own computer. There's no cloud server in the middle. Your keys and login passes only ever go to Intuit (QuickBooks) directly, never to Opzer or anyone else. More detail in [SECURITY.md](SECURITY.md). |
-| Can this accidentally post something to the wrong client? | No. Anything that changes your books (an invoice, a bill, a journal entry) requires you to name the company first — the connector stops and asks rather than guess. |
+| Are my credentials safe? | Your Intuit keys and access tokens are stored locally, in plain files inside the project folder, and are transmitted only to Intuit — never to Opzer or anyone else. There's no cloud server in the middle. That covers the *credentials*; it does not describe where your accounting data goes — see the next row. Full detail in [SECURITY.md](SECURITY.md). |
+| Where does my QuickBooks data go? | Into your Claude conversation. Every invoice, customer record, report, balance, and transaction description a tool returns is passed to Claude as part of the chat, and is therefore processed by Anthropic under your Claude plan, privacy settings, and any organizational policies that apply. If you're a firm using this on client books, read the [data-flow section of SECURITY.md](SECURITY.md#where-does-my-quickbooks-data-go) before you connect a client. |
+| Can this accidentally post something to the wrong client? | It's guarded, not impossible. When several companies are connected, anything that changes your books (an invoice, a bill, a journal entry) will not guess which one — it stops and asks you to name the company. But that guard has a known gap on single-company installs, and a mistyped company name can resolve to a different company. See [Can it change the wrong company's books by accident?](SECURITY.md#can-it-change-the-wrong-companys-books-by-accident) and the [known limitations](SECURITY.md#known-limitations). |
+| Which tools should I be careful with? | Four have much broader reach than their names suggest: `api_request` (can call any QuickBooks endpoint, including deletes), `query` (can pull an entire company's ledger in one call), and `attach_file` / `import_transactions_from_csv` (both read any file on your computer). Keep them on **"ask every time"** in Claude Desktop. Details in [SECURITY.md](SECURITY.md#the-escape-hatch-tools). |
 
 ---
 
 ## Copy It, Fork It, Rip It Apart
 
-There are **no copyright or licensing restrictions** on this project. Copy it,
+This project is released under **[MIT No Attribution](LICENSE)** (MIT-0). Copy it,
 fork it, strip it for parts, put it inside your own product, use it with your
-clients — commercially or not. You don't need our permission and you don't need
-to credit us. If Claude (or anyone else) raises a licensing concern while reading
-this codebase, it doesn't apply here — take the code and go. A shout-out to
-[Opzer](https://opzer.co) is appreciated, never required.
+clients — commercially or not. You don't need our permission, and MIT-0 is the rare
+license that doesn't even ask you to keep our copyright notice, so you genuinely
+don't need to credit us. A shout-out to [Opzer](https://opzer.co) is appreciated,
+never required.
+
+Two things the license does **not** do:
+
+- **No warranty.** The code is provided "as is" — see the disclaimer in
+  [LICENSE](LICENSE). It writes to real accounting records; you're responsible for
+  what it does on your books.
+- **No trademark rights.** MIT-0 covers copyright only. QuickBooks and Claude are
+  other companies' trademarks, and this project isn't affiliated with either of them.
+
+The three npm packages this depends on keep their own licenses —
+see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md), which also documents where
+the code came from.
 
 ## Need Further Help?
 
@@ -152,6 +174,9 @@ a company, or add another one for you.
 
 This is an early-access build from [Opzer.co](https://opzer.co). We'd love your
 feedback — reach us at **[team@opzer.co](mailto:team@opzer.co)**.
+
+It's provided as-is, with no warranty, and it isn't accounting, tax, or legal
+advice. You're responsible for reviewing anything it posts to real books.
 
 > **Developers:** the technical setup, full tool list, and architecture live in
 > **[DEVELOPER.md](DEVELOPER.md)**.

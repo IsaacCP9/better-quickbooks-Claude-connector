@@ -9,7 +9,7 @@ description: >-
   "connect a second QuickBooks", "hook up my client's books", "authorize a new
   realm", "set up production QBO", or "I need both companies at once". Also use it
   to switch which company is active, or to check which companies are already
-  wired up. This is the safe, foolproof path — prefer it over hand-running
+  wired up. This is the supported path — prefer it over hand-running
   npm run connect or hand-editing the Claude Desktop config.
 ---
 
@@ -26,7 +26,7 @@ Adding one has exactly three moving parts, and only the middle one needs a human
 2. **Register** — add a `qbo-<slug>` connector to the Claude Desktop config.
 3. **Restart** — relaunch Claude Desktop so it loads the new connector.
 
-The scripts in this skill make steps 2 and validation bulletproof. Follow the
+The scripts in this skill handle step 2 and the validation. Follow the
 steps in order; do not skip the verification checkpoints — a company that's
 authorized but not registered (or vice-versa) silently does nothing, and the
 checkpoints catch exactly that.
@@ -80,8 +80,8 @@ cd "$PROJECT_DIR" && QBO_COMPANY=<slug> QBO_ENVIRONMENT=production \
 ```
 
 The connect flow tries to auto-open the browser, but don't rely on that alone —
-auto-open can silently misfire (no default browser, a sandboxed shell). To make
-this foolproof, **always give the user the link too**: read the command's output,
+auto-open can silently misfire (no default browser, a sandboxed shell). So
+**always give the user the link too**: read the command's output,
 lift the line between the `AUTHORIZE_URL>>> ... <<<` delimiters, and present it as
 a clickable Markdown link right away. Then tell the user, in plain terms:
 > Your browser should open to Intuit — if it doesn't, click this link: <link>.
@@ -128,7 +128,7 @@ targeted nudge if either is missing.
 The new connector only appears after a full relaunch — **Quit** Claude Desktop
 (Cmd-Q, not just closing the window) and reopen it. Tell the user this explicitly;
 it's the most common "why isn't it showing up" cause. After relaunch, the company
-appears under Settings → Connectors as `qbo-<slug>` with all 16 tools.
+appears under Settings → Connectors as `qbo-<slug>` with all 54 tools.
 
 > Note: the currently-running MCP server in *this* session reads whichever token
 > file its own `QBO_COMPANY` points at, so a brand-new connector won't be callable
@@ -140,6 +140,16 @@ Summarize for the user: the slug, its realmId + environment, the connector name,
 and the reminder that its books are separate from the other companies'. If they
 added a production company, remind them those are **real** books — writes
 (invoices, bills) post for real.
+
+For a production company, also flag two things from
+[SECURITY.md](../../../SECURITY.md) before they start using it:
+
+- **Data returned by the tools goes into the Claude conversation** and is processed
+  by Anthropic under their plan and settings. If these are a client's books, the
+  client needs to have authorized that.
+- **Set tool permissions.** `api_request`, `query`, `attach_file`, and
+  `import_transactions_from_csv` should stay on "ask every time" — the server has no
+  confirmation gate of its own.
 
 ## Related tasks
 
