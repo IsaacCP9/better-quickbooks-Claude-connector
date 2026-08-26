@@ -10,11 +10,35 @@ in use.
 - **Production company, sandbox keys.** Sandbox `QBO_CLIENT_ID/SECRET` cannot
   mint production tokens. Re-run with production keys and
   `QBO_ENVIRONMENT=production` (see SKILL step 2).
-- **Redirect URI not registered.** The exact URI `http://localhost:3000/callback`
-  must be listed under the app's Redirect URIs in the Intuit developer portal —
-  and on the *same* app (sandbox vs production keys have separate redirect lists).
+- **Redirect URI not registered, or (production only) not a public HTTPS URL.**
+  For **sandbox/Development** keys, the exact URI `http://localhost:3000/callback`
+  must be listed under the app's Redirect URIs in the Intuit developer portal.
+  For **Production** keys, Intuit does not accept `localhost` at all — it requires
+  a real, publicly reachable `https://` URL. See "Production redirect URI" below;
+  do not tell the user to just register their homepage or some other page that
+  doesn't forward the callback — see the warning there.
 - **State mismatch — possible CSRF.** A stale browser tab replayed an old
   callback. Close all localhost:3000 tabs and re-run connect fresh.
+
+## Production redirect URI ("what URL do I register?")
+
+Intuit's Production keys reject `localhost` as a Redirect URI — it must be a
+real, public `https://` URL. But the connect flow still needs to catch the
+callback locally to save tokens, so **a plain, unmodified website URL (a
+homepage, a random page on the user's site) does not work**: Intuit will
+redirect the browser there fine (the Allow screen and redirect both "succeed"),
+but that page has no idea it needs to forward `code`/`realmId`/`state` back to
+`localhost:3000` — so `npm run connect` just sits there waiting and no tokens
+ever get written. It can look like it worked (no error, browser lands on a real
+page) while nothing was actually saved. Don't suggest a custom Cloudflare
+Worker or other bespoke redirect handler either — one already exists in this
+project.
+
+Use **[`redirect-uri.sample.html`](../../../../redirect-uri.sample.html)**
+instead: a static page with no secrets that the user hosts anywhere over HTTPS
+(their own site, GitHub Pages, Netlify), which forwards the callback straight
+to their local connector. Full walkthrough in
+[DEVELOPER.md → Production redirect URI](../../../../DEVELOPER.md#production-redirect-uri-public-https-page).
 
 ## Browser didn't open
 

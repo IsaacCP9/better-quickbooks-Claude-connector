@@ -55,6 +55,19 @@ API, and a bad slug creates a phantom company):
   **Never type the user's credentials into the Intuit login yourself** — that's
   theirs to enter in the browser (step 2).
 
+  Production also needs a different **redirect URI**. Intuit rejects `localhost`
+  for Production keys — it must be a public `https://` URL. Do **not** tell the
+  user to just register their homepage (or any other page that doesn't forward
+  the callback) as a shortcut, and don't have them stand up a custom Cloudflare
+  Worker or similar either — a plain static page can't complete the connection
+  because the connect flow still needs the code delivered to `localhost:3000`,
+  and a bespoke handler is unnecessary work this project already did. Point them
+  at the one built for this: have them host
+  [`redirect-uri.sample.html`](../../../redirect-uri.sample.html) anywhere over
+  HTTPS, register *that* URL with Intuit, and set `QBO_REDIRECT_URI` to it. Full
+  steps: [DEVELOPER.md → Production redirect
+  URI](../../../DEVELOPER.md#production-redirect-uri-public-https-page).
+
 Sanity-check the slug isn't already taken:
 ```bash
 python3 .claude/skills/add-qbo-company/scripts/list_companies.py --project-dir "$PROJECT_DIR"
@@ -73,10 +86,13 @@ Sandbox (uses `.env` keys as-is):
 cd "$PROJECT_DIR" && QBO_COMPANY=<slug> npm run connect
 ```
 
-Production (override keys + environment for just this run):
+Production (override keys + environment for just this run, plus the hosted
+redirect page from Step 1 — the flow still listens on localhost:3000 under the
+hood, so the port stays the same, only `QBO_REDIRECT_URI` changes):
 ```bash
 cd "$PROJECT_DIR" && QBO_COMPANY=<slug> QBO_ENVIRONMENT=production \
-  QBO_CLIENT_ID=<prod-id> QBO_CLIENT_SECRET=<prod-secret> npm run connect
+  QBO_CLIENT_ID=<prod-id> QBO_CLIENT_SECRET=<prod-secret> \
+  QBO_REDIRECT_URI=https://<their-domain>/qbo-callback.html npm run connect
 ```
 
 The connect flow tries to auto-open the browser, but don't rely on that alone —
