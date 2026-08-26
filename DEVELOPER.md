@@ -37,6 +37,33 @@ locally and auto-refresh (~100 days).
 The easiest way to add companies is the bundled **`add-qbo-company` skill** (see
 below) — it runs the connect flow, registers the connector, and validates both.
 
+### Production redirect URI (public HTTPS page)
+
+`http://localhost:3000/callback` (the default `QBO_REDIRECT_URI`) works for
+**Development** (sandbox) keys, because Intuit accepts localhost redirects there.
+**Production** keys don't accept localhost — Intuit requires a real, public
+`https://` URL registered as the Redirect URI.
+
+The connect flow still needs to catch the callback locally to exchange the code
+for tokens, so bridge the two with **[`redirect-uri.sample.html`](redirect-uri.sample.html)**:
+a static page with no server-side code and no secrets, safe to host anywhere
+public.
+
+1. Upload `redirect-uri.sample.html` to any website you control over HTTPS, e.g.
+   `https://your-domain.com/qbo-callback.html` (your own site, GitHub Pages,
+   Netlify — anything static works).
+2. On developer.intuit.com, register that exact URL as your app's Production
+   Redirect URI.
+3. In `.env`, set `QBO_REDIRECT_URI=https://your-domain.com/qbo-callback.html`
+   and `QBO_ENVIRONMENT=production`.
+4. Run the connect flow as usual. Intuit sends the browser to your hosted page
+   after login; the page immediately forwards it to `http://localhost:3000/...`
+   on your computer, where the connector is waiting and finishes the exchange
+   exactly as it does for sandbox.
+
+If you changed the local listener away from port 3000, edit `LOCAL_PORT` at the
+top of the page's script to match.
+
 ### 4. Connect to Claude Desktop
 Add one server entry pointing at `src/index.js` to your Claude Desktop config
 file. It lives at:

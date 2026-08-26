@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<!--
+  QuickBooks OAuth redirect bridge — sample file.
+
+  What this is for
+  -----------------
+  This connector's `npm run connect` flow authorizes QuickBooks by opening your
+  browser and catching the callback on your own computer (http://localhost:3000).
+  That works fine with Intuit's Development (sandbox) keys.
+
+  Intuit's Production keys, however, require the registered Redirect URI to be a
+  real, public https:// URL — localhost is not accepted. This page bridges the
+  two: host it anywhere public (your own website, GitHub Pages, Netlify, etc.),
+  register ITS url as your app's Production Redirect URI, and it will bounce the
+  browser straight back to the local connector running on your computer, which
+  finishes the authorization exactly as it does for sandbox.
+
+  How to use it
+  -------------
+  1. Upload this file to any website you control over HTTPS, e.g.:
+       https://your-domain.com/qbo-callback.html
+  2. On developer.intuit.com, add that exact URL as a Redirect URI on your app.
+  3. In this project's `.env`, set:
+       QBO_REDIRECT_URI=https://your-domain.com/qbo-callback.html
+  4. Run the connect flow as usual (`npm run connect`, or the add-qbo-company
+     skill). When you log in and click Allow, Intuit sends the browser here —
+     this page immediately forwards it to your computer, where the connector
+     is waiting to finish the exchange.
+
+  This file contains no secrets and does nothing but relay a few URL query
+  parameters (code, state, realmId) to localhost — it is safe to host publicly.
+  See DEVELOPER.md → "Production redirect URI" for the full walkthrough.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Connecting to QuickBooks…</title>
+<meta name="robots" content="noindex" />
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    padding: 3rem 1.5rem;
+    text-align: center;
+    color: #1a1a1a;
+    max-width: 34rem;
+    margin: 0 auto;
+  }
+  h2 { margin-bottom: 0.5rem; }
+  p { line-height: 1.5; }
+  code {
+    background: #f2f2f2;
+    padding: 0.15rem 0.4rem;
+    border-radius: 0.25rem;
+    word-break: break-all;
+  }
+  a.button {
+    display: inline-block;
+    margin-top: 1.5rem;
+    padding: 0.7rem 1.4rem;
+    background: #2ca01c;
+    color: #fff;
+    text-decoration: none;
+    border-radius: 0.4rem;
+    font-weight: 600;
+  }
+  .error { color: #b3261e; }
+  .fine-print { color: #666; font-size: 0.85rem; margin-top: 2rem; }
+</style>
+</head>
+<body>
+  <div id="status">
+    <h2>Connecting you back to your computer…</h2>
+    <p>Please wait — this only takes a second.</p>
+  </div>
+
+  <p class="fine-print">
+    If nothing happens after a few seconds, the connector's authorization step
+    may no longer be running on your computer. Go back to Claude Code / the
+    terminal, start the connect step again, then use the link below.
+  </p>
+  <a id="manual-link" class="button" href="#">Continue to your computer</a>
+
+<script>
+  // Default port matches this connector's default local listener
+  // (http://localhost:3000/callback). If you customized QBO_REDIRECT_URI to
+  // use a different port, edit LOCAL_PORT below to match.
+  var LOCAL_PORT = 3000;
+
+  var params = new URLSearchParams(window.location.search);
+  var target = "http://localhost:" + LOCAL_PORT + window.location.pathname + window.location.search;
+
+  document.getElementById("manual-link").href = target;
+
+  var error = params.get("error");
+  if (error) {
+    document.getElementById("status").innerHTML =
+      '<h2 class="error">QuickBooks authorization was not completed</h2>' +
+      "<p><code>" + error + "</code></p>" +
+      (params.get("error_description")
+        ? "<p>" + params.get("error_description") + "</p>"
+        : "") +
+      "<p>You can close this tab and try connecting again.</p>";
+  } else if (params.get("code") && params.get("realmId")) {
+    // Full top-level navigation to localhost — not a fetch/XHR, so it is not
+    // blocked by mixed-content or private-network-access restrictions.
+    window.location.replace(target);
+  } else {
+    document.getElementById("status").innerHTML =
+      '<h2 class="error">Nothing to connect</h2>' +
+      "<p>This page didn't receive an authorization code. If you navigated " +
+      "here directly, go back and restart the connect flow instead.</p>";
+  }
+</script>
+</body>
+</html>
